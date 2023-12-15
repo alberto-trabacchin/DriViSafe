@@ -1,3 +1,7 @@
 PyAV
 numpy
 matplotlib
+split-folders
+torch
+torchvision
+torchaudio

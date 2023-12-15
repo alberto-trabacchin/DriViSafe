@@ -4,6 +4,22 @@ import os
 import multiprocessing as mp
 import json
 import argparse
+import splitfolders
+from typing import Tuple
+
+
+def split_dataset(
+        dataset_path: Path, 
+        split_ratio: Tuple[float, float, float],
+        seed: int,
+) -> None:
+    output_path = dataset_path / "train_val_test"
+    splitfolders.ratio(
+        input = str(dataset_path),
+        output = str(output_path),
+        seed = seed,
+        ratio = split_ratio
+    )
 
 
 def worker(args) -> bool:
@@ -89,3 +105,10 @@ if __name__ == "__main__":
 
     # Create local-storage.json to load frames into Label Studio
     create_labelstudio_json(save_path)
+
+    # Split the dataset into train, validation, and test sets
+    split_dataset(
+        dataset_path,
+        split_ratio = (0.8, 0.1, 0.1),
+        seed = 42
+    )
