@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Tuple
 from torch.utils.data import DataLoader
 from torchvision.datasets.video_utils import VideoClips
+import argparse
 
 
 def get_dataloaders(
@@ -27,4 +28,8 @@ def get_dataloaders(
 
 
 if __name__ == "__main__":
-    pass
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train_lab_size", type = float, default = 0.1)
+    parser.add_argument("--test_size", type = float, default = 0.9)
+    parser.add_argument("--train_unlab_size", type = float, default = 0.8)
+    parser.add_argument("--val_size", type = float, default = 0.2)
