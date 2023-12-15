@@ -8,20 +8,6 @@ import splitfolders
 from typing import Tuple
 
 
-def split_dataset(
-        dataset_path: Path, 
-        split_ratio: Tuple[float, float, float],
-        seed: int,
-) -> None:
-    output_path = dataset_path / "train_val_test"
-    splitfolders.ratio(
-        input = str(dataset_path),
-        output = str(output_path),
-        seed = seed,
-        ratio = split_ratio
-    )
-
-
 def worker(args) -> bool:
     """
     Convert a video into a series of JPEG images.
@@ -73,15 +59,16 @@ def create_labelstudio_json(save_path: Path) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset_path", type = str, required = True)
+    parser.add_argument("--dataset_path", type = str, required = True, help = "Path to the dataset: /..../Dr(eye)ve")
     parser.add_argument("--sampling_step", type = int, default = 10)
     parser.add_argument("--max_frames", type = int, default = None)
     parser.add_argument("--quality", type = int, default = 50)
     parser.add_argument("--n_workers", type = int, default = os.cpu_count())
     args = parser.parse_args()
 
-    dataset_path = Path(args.dataset_path)
+    dataset_path = Path(args.dataset_path) / "DREYEVE_DATA"
     save_path = Path(args.dataset_path) / "data_frames"
+    save_path.mkdir(exist_ok = True)
 
     # Get all video paths
     video_paths = [(f / "video_garmin.avi") for f in dataset_path.iterdir() if f.is_dir()]
@@ -105,10 +92,3 @@ if __name__ == "__main__":
 
     # Create local-storage.json to load frames into Label Studio
     create_labelstudio_json(save_path)
-
-    # Split the dataset into train, validation, and test sets
-    split_dataset(
-        dataset_path,
-        split_ratio = (0.8, 0.1, 0.1),
-        seed = 42
-    )
