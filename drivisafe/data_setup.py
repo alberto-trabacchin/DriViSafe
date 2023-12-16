@@ -36,7 +36,7 @@ class DreyeveDataset(Dataset):
 
 def convert_annot_path(
         root_path: Path,
-        frame_annot_paths: Path
+        annot_path: Path
 ) -> Path:
     """
     Convert the annotation path to the full frame path.
@@ -51,10 +51,15 @@ def convert_annot_path(
 
     Returns:
         Path: The full frame path.
+
+    Example:
+        root_path = /mnt/c/Dr(eye)ve/
+        annot_path = /data/local-files?d=Dr(eye)ve/data_frames/04_4420.jpg
+        returns: /mnt/c/Dr(eye)ve/data_frames/04_4420.jpg
     """
-    parts = frame_annot_paths.parts
-    full_frame_path = root_path / parts[-2] / parts[-1]
-    return full_frame_path
+    parts = annot_path.parts
+    full_path = root_path / parts[-2] / parts[-1]
+    return full_path
     
 
 def get_data_annotations(
