@@ -67,7 +67,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     dataset_path = Path(args.dataset_path) / "DREYEVE_DATA"
-    save_path = Path(args.dataset_path) / "data_frames"
+    save_path = dataset_path / "data_frames"
     save_path.mkdir(exist_ok = True)
 
     # Get all video paths
@@ -91,4 +91,4 @@ if __name__ == "__main__":
     assert(all(results))
 
     # Create local-storage.json to load frames into Label Studio
-    create_labelstudio_json(save_path)
+    create_labelstudio_json(save_path = dataset_path)
