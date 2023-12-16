@@ -253,7 +253,6 @@ def make_datasets(
     Returns:
         Tuple[Dataset, Dataset, Dataset]: The training, testing, and validation datasets.
     """
-    frame_paths = frames_path.iterdir()
     lab_data, labels = get_labeled_data(root_path, annot_path, labels_to_idx)
     unlab_data = get_unlabeled_data(frames_path, lab_data)
 
