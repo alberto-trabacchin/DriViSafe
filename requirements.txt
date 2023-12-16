@@ -2,3 +2,8 @@ PyAV
 numpy
 matplotlib
 split-folders
+PIL
+json
+torch
+torchvision
+torchaudio
