@@ -11,6 +11,18 @@ from matplotlib import pyplot as plt
 
 
 class DreyeveDataset(Dataset):
+    """
+    A custom Dataset class for the Dreyeve dataset.
+
+    This class inherits from the PyTorch Dataset class and overrides the __init__ and __getitem__ methods.
+    It represents a dataset of images with optional labels and transformations.
+
+    Attributes:
+        data (List[Path]): A list of paths to the images in the dataset.
+        labels (List[int], optional): A list of labels corresponding to the images. Defaults to None.
+        transform (transforms, optional): A torchvision.transforms instance containing the transformations to be applied to the images. Defaults to None.
+        labels_to_idx (Dict[str, int], optional): A dictionary mapping labels to indices. Defaults to None.
+    """
     def __init__(
             self,
             data: List[Path],
@@ -24,6 +36,19 @@ class DreyeveDataset(Dataset):
         self.labels_to_idx = labels_to_idx
     
     def __getitem__(self, index: int) -> Tuple[str, int]:
+        """
+        Get the item at the given index.
+
+        If transform is not None, apply it to the image.
+        If labels is not None, return the image and its corresponding label.
+        Otherwise, return the image and None.
+
+        Args:
+            index (int): The index of the item.
+
+        Returns:
+            Tuple[str, int]: The image and its label (or None).
+        """
         path = self.data[index]
         image = Image.open(path)
         if self.transform is not None:
@@ -38,6 +63,16 @@ class DreyeveDataset(Dataset):
         return len(self.data)
     
     def plot_sample(self, index: int) -> None:
+        """
+        Plot a sample image from the dataset.
+
+        This method retrieves the image and its label at the given index, and plots the image.
+        If labels_to_idx is not None and the label is not None, it converts the label from an index to a string using labels_to_idx.
+        It then sets the title of the plot to the label.
+
+        Args:
+            index (int): The index of the sample to plot.
+        """
         image, label = self[index]
         fig, ax = plt.subplots()
         ax.imshow(image.permute(1, 2, 0))
@@ -194,6 +229,30 @@ def make_datasets(
         shuffle: bool = True,
         seed: int = 42
 ) -> Tuple[Dataset, Dataset, Dataset]:
+    """
+    Create datasets for training (labeled + unlabeled), testing (labeled), and validation(unlabeled).
+
+    This function first retrieves the labeled and unlabeled data, then splits them into labeled training,
+    unlabeled training, testing, and validation datasets.
+    It returns these datasets in a tuple.
+
+    Args:
+        root_path (Path): The root path.
+        frames_path (Path): The path to the frames.
+        annot_path (Path): The path to the annotations.
+        train_lab_size (float): The size of the labeled training dataset.
+        test_size (float): The size of the testing dataset.
+        train_unlab_size (float): The size of the unlabeled training dataset.
+        val_size (float): The size of the validation dataset.
+        labels_to_idx (Dict[str, int]): The mapping from labels to indices.
+        transform (transforms, optional): A torchvision.transforms instance containing the 
+                                          transformations to be applied to the images. Defaults to None.
+        shuffle (bool, optional): Whether to shuffle the data. Defaults to True.
+        seed (int, optional): The seed for the random number generator. Defaults to 42.
+
+    Returns:
+        Tuple[Dataset, Dataset, Dataset]: The training, testing, and validation datasets.
+    """
     frame_paths = frames_path.iterdir()
     lab_data, labels = get_labeled_data(root_path, annot_path, labels_to_idx)
     unlab_data = get_unlabeled_data(frames_path, lab_data)
