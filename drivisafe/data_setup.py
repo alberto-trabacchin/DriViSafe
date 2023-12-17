@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Tuple
 from torch.utils.data import DataLoader, Dataset
+import torch
 from torchvision.transforms import transforms
 from PIL import Image
 from typing import List, Dict
@@ -55,9 +56,10 @@ class DreyeveDataset(Dataset):
             image = self.transform(image)
         if self.labels is not None:
             label = self.labels[index]
+            label = torch.LongTensor([label]).squeeze()
             return image, label
         else:
-            return image, None
+            return image, torch.LongTensor([2]).squeeze()
 
     def __len__(self) -> int:
         return len(self.data)
@@ -348,7 +350,7 @@ def make_dataloaders(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root_dir", type = str, required = True, help = "Path to the dataset: /..../Dr(eye)ve")
+    parser.add_argument("--dataset_path", type = str, required = True, help = "Path to the dataset: /..../Dr(eye)ve")
     parser.add_argument("--train_lab_size", type = float, default = 0.1, help = "Size of the labeled training set")
     parser.add_argument("--test_size", type = float, default = 0.9, help = "Size of the testing set")
     parser.add_argument("--train_unlab_size", type = float, default = 0.8, help = "Size of the unlabeled training set")
@@ -373,9 +375,9 @@ if __name__ == "__main__":
 
     # Create the datasets
     train_lab_dataset, train_unlab_dataset, test_dataset, valid_dataset = make_datasets(
-        root_path = Path(args.root_dir),
-        frames_path = Path(args.root_dir) / "data_frames",
-        annot_path = Path(args.root_dir) / "data_annotations.json",
+        root_path = Path(args.dataset_path),
+        frames_path = Path(args.dataset_path) / "data_frames",
+        annot_path = Path(args.dataset_path) / "data_annotations.json",
         train_lab_size = args.train_lab_size,
         test_size = args.test_size,
         train_unlab_size = args.train_unlab_size,
@@ -400,3 +402,10 @@ if __name__ == "__main__":
     # Plot a sample image from the test dataset
     test_dataset.plot_sample(index = 1)
     plt.show()
+    X, y = test_dataset[0]
+    print(X.shape, y.shape)
+    print(y)
+    print(type(X), type(y))
+
+    images, targets = next(iter(test_dl))
+    print(targets)
