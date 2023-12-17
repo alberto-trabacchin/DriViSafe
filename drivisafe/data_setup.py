@@ -292,7 +292,7 @@ def make_datasets(
         transform = transform,
         labels_to_idx = labels_to_idx
     )
-    return train_lab_dataset, test_dataset, train_unlab_dataset, valid_dataset
+    return train_lab_dataset, train_unlab_dataset, test_dataset, valid_dataset
 
 
 def make_dataloaders(
@@ -372,7 +372,7 @@ if __name__ == "__main__":
     ])
 
     # Create the datasets
-    train_lab_dataset, test_dataset, train_unlab_dataset, valid_dataset = make_datasets(
+    train_lab_dataset, train_unlab_dataset, test_dataset, valid_dataset = make_datasets(
         root_path = Path(args.root_dir),
         frames_path = Path(args.root_dir) / "data_frames",
         annot_path = Path(args.root_dir) / "data_annotations.json",
