@@ -7,3 +7,4 @@ json
 torch
 torchvision
 torchaudio
+tqdm
