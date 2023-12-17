@@ -295,6 +295,57 @@ def make_datasets(
     return train_lab_dataset, test_dataset, train_unlab_dataset, valid_dataset
 
 
+def make_dataloaders(
+        lab_train_dataset: Dataset,
+        unlab_train_dataset: Dataset,
+        test_dataset: Dataset,
+        val_dataset: Dataset,
+        batch_size: int,
+        shuffle: bool,
+        num_workers: int
+) -> DataLoader:
+    """
+    Create dataloaders for training (labeled + unlabeled), testing (labeled), and validation(unlabeled).
+
+    Args:
+        lab_train_dataset (Dataset): The labeled training dataset.
+        unlab_train_dataset (Dataset): The unlabeled training dataset.
+        test_dataset (Dataset): The testing dataset.
+        val_dataset (Dataset): The validation dataset.
+        batch_size (int): The batch size.
+        shuffle (bool): Whether to shuffle the data.
+        num_workers (int): The number of workers for the dataloader.
+
+    Returns:
+        DataLoader: The training, testing, and validation dataloaders.
+    """
+    lab_train_dl = DataLoader(
+        dataset = lab_train_dataset,
+        batch_size = batch_size,
+        shuffle = shuffle,
+        num_workers = num_workers
+    )
+    unlab_train_dl = DataLoader(
+        dataset = unlab_train_dataset,
+        batch_size = batch_size,
+        shuffle = shuffle,
+        num_workers = num_workers
+    )
+    test_dl = DataLoader(
+        dataset = test_dataset,
+        batch_size = batch_size,
+        shuffle = shuffle,
+        num_workers = num_workers
+    )
+    val_dl = DataLoader(
+        dataset = val_dataset,
+        batch_size = batch_size,
+        shuffle = shuffle,
+        num_workers = num_workers
+    )
+    return lab_train_dl, unlab_train_dl, test_dl, val_dl
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--root_dir", type = str, required = True, help = "Path to the dataset: /..../Dr(eye)ve")
@@ -302,18 +353,25 @@ if __name__ == "__main__":
     parser.add_argument("--test_size", type = float, default = 0.9, help = "Size of the testing set")
     parser.add_argument("--train_unlab_size", type = float, default = 0.8, help = "Size of the unlabeled training set")
     parser.add_argument("--val_size", type = float, default = 0.2, help = "Size of the validation set")
+    parser.add_argument("--batch_size", type = int, default = 32, help = "Batch size")
+    parser.add_argument("--shuffle", type = bool, default = True, help = "Whether to shuffle the data during training")
+    parser.add_argument("--num_workers", type = int, default = 4, help = "Number of workers for the dataloader")
     parser.add_argument("--seed", type = int, default = 42, help = "Random seed")
     args = parser.parse_args()
 
+    # Dict to map labels to indices
     labels_to_idx = {
         "Dangerous": 0,
         "NOT Dangerous": 1
     }
     
+    # Transform to apply to the images
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Resize((108, 192), antialias = True)
     ])
+
+    # Create the datasets
     train_lab_dataset, test_dataset, train_unlab_dataset, valid_dataset = make_datasets(
         root_path = Path(args.root_dir),
         frames_path = Path(args.root_dir) / "data_frames",
@@ -327,5 +385,18 @@ if __name__ == "__main__":
         shuffle = True,
         seed = args.seed
     )
+
+    # Create the dataloaders
+    train_lab_dl, train_unlab_dl, test_dl, val_dl = make_dataloaders(
+        lab_train_dataset = train_lab_dataset,
+        unlab_train_dataset = train_unlab_dataset,
+        test_dataset = test_dataset,
+        val_dataset = valid_dataset,
+        batch_size = args.batch_size,
+        shuffle = args.shuffle,
+        num_workers = args.num_workers
+    )
+
+    # Plot a sample image from the test dataset
     test_dataset.plot_sample(index = 1)
     plt.show()
