@@ -250,10 +250,19 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
         t_losses_mpl.update(t_loss_mpl.item())
         mean_mask.update(mask.mean().item())
 
+        test_loss, test_acc = evaluate(
+            model = student_model,
+            data_loader = test_loader,
+            criterion = torch.nn.CrossEntropyLoss(),
+            device = args.device
+        )
+
         tqdm.write(
-            f"Teacher Loss: {t_losses.avg:.6f}\n" \
-            f"Student Loss: {s_losses.avg:.6f}\n" \
-            f"Teacher Loss MPL: {t_losses_mpl.avg:.6f}\n"
+            f"Teacher Train Loss: {t_losses.avg:.10f}\n" \
+            f"Student Train Loss: {s_losses.avg:.10f}\n" \
+            f"Teacher Train Loss MPL: {t_losses_mpl.avg:.10f}\n" \
+            f"Student Test Loss: {test_loss:.10f}\n" \
+            f"Student Test Accuracy: {test_acc * 100:.4f}%\n"
         )
 
         batch_time.update(time.time() - end)
@@ -493,5 +502,5 @@ if __name__ == "__main__":
         criterion = torch.nn.CrossEntropyLoss(),
         device = args.device
     )
-    print(f"Test loss: {test_loss :.4f}")
-    print(f"Test accuracy: {test_acc * 100 :.2f}")
+    print(f"Test loss: {test_loss :.8f}")
+    print(f"Test accuracy: {test_acc * 100 :.4f}")
