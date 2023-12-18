@@ -20,7 +20,7 @@ from drivisafe.utils import AverageMeter
 from matplotlib import pyplot as plt
 from typing import Tuple
 
-from drivisafe import data_setup, utils, engine
+from drivisafe import data_setup, utils
 
 logger = logging.getLogger(__name__)
 
@@ -261,7 +261,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
             f"Teacher Train Loss: {t_losses.avg:.10f}\n" \
             f"Student Train Loss: {s_losses.avg:.10f}\n" \
             f"Teacher Train Loss MPL: {t_losses_mpl.avg:.10f}\n" \
-            f"Student Test Loss: {test_loss:.10f}\n" \
+            f"Student Test Loss: {test_loss.avg:.10f}\n" \
             f"Student Test Accuracy: {test_acc * 100:.4f}%\n"
         )
 
