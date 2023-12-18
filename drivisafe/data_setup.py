@@ -64,7 +64,7 @@ class DreyeveDataset(Dataset):
     def __len__(self) -> int:
         return len(self.data)
     
-    def plot_sample(self, index: int) -> None:
+    def plot_sample(self, index: int, title: str = None) -> None:
         """
         Plot a sample image from the dataset.
 
@@ -75,14 +75,19 @@ class DreyeveDataset(Dataset):
         Args:
             index (int): The index of the sample to plot.
         """
-        image, label = self[index]
+        path = self.data[index]
+        image = Image.open(path)
+        _, label = self[index]
         fig, ax = plt.subplots()
-        ax.imshow(image.permute(1, 2, 0))
-        if (self.labels_to_idx is not None) and (label is not None):
-            keys = list(self.labels_to_idx.keys())
-            values = list(self.labels_to_idx.values())
-            label = keys[values.index(label)]
-        ax.set_title(label)
+        ax.imshow(image)
+        # if (self.labels_to_idx is not None) and (label is not None):
+        #     keys = list(self.labels_to_idx.keys())
+        #     values = list(self.labels_to_idx.values())
+        #     label = keys[values.index(label)]
+        # if title is None:
+        #     ax.set_title(label)
+        # else:
+        ax.set_title(title)
 
 
 def convert_annot_path(

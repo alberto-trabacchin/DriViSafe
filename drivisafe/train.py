@@ -6,15 +6,19 @@ import random
 import numpy as np
 from pathlib import Path
 from vit_pytorch import SimpleViT
+from vit_pytorch.deepvit import DeepViT
+from vit_pytorch.vit_for_small_dataset import ViT
 from torch.optim.lr_scheduler import LambdaLR
 from torch.cuda import amp
 import torch.nn as nn
 import math
-import tqdm
+from tqdm import tqdm
 import logging
 import time
 from torch.nn import functional as F
 from drivisafe.utils import AverageMeter
+from matplotlib import pyplot as plt
+from typing import Tuple
 
 from drivisafe import data_setup, utils, engine
 
@@ -24,8 +28,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--dataset_path", type = str, required = True, help = "Path to the dataset: /..../Dr(eye)ve")
 parser.add_argument("--train_lab_size", default = 0.5, type = float, help = "number of labeled train samples")
 parser.add_argument("--test_size", default = 0.5, type = float, help = "number of test samples")
-parser.add_argument("--train_unlab_size", default = 0.8, type = float, help = "number of unlabeled train samples")
-parser.add_argument("--val_size", default = 0.2, type = float, help = "number of validation samples")
+parser.add_argument("--train_unlab_size", default = 0.99, type = float, help = "number of unlabeled train samples")
+parser.add_argument("--val_size", default = 0.01, type = float, help = "number of validation samples")
 parser.add_argument("--total_steps", default = 1000, type = int, help = "number of total steps to run")
 parser.add_argument("--eval_step", default = 100, type = int, help = "number of eval steps to run")
 parser.add_argument("--warmup_steps", default = 0, type = int, help = "number of warmup steps to run")
@@ -110,8 +114,8 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
     # limit = 3.0**(0.5)  # 3 = 6 / (f_in + f_out)
     # nn.init.uniform_(moving_dot_product, -limit, limit)
 
-    for step in range(args.total_steps):
-        print("step: ", step)
+    # for step in range(args.total_steps):
+    for step in tqdm(range(args.total_steps)):
         if step % args.eval_step == 0:
             # pbar = tqdm(range(args.eval_step), disable=args.local_rank not in [-1, 0])
             # pbar = tqdm(range(args.eval_step), disable=False)
@@ -159,7 +163,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
         images_l = images_l.to(args.device)
         images_u = images_u.to(args.device)
         targets = targets.to(args.device)
-        print("targets: ", targets)
+        # print("targets: ", targets)
         with amp.autocast(enabled=args.amp):
             batch_size = images_l.shape[0]
             t_images = torch.cat((images_l, images_u))
@@ -169,10 +173,11 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
             del t_logits
 
             t_loss_l = criterion(t_logits_l, targets)
-            print("t_loss_l: ", t_loss_l.item())
+            # print("t_loss_l: ", t_loss_l.item())
 
             soft_pseudo_label = torch.softmax(t_logits_u.detach() / args.temperature, dim=-1)
             max_probs, hard_pseudo_label = torch.max(soft_pseudo_label, dim=-1)
+            # print(max_probs, hard_pseudo_label, soft_pseudo_label)
             mask = max_probs.ge(args.threshold).float()
             t_loss_u = torch.mean(
                 -(soft_pseudo_label * torch.log_softmax(t_logits_u, dim=-1)).sum(dim=-1) * mask
@@ -188,7 +193,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
 
             s_loss_l_old = F.cross_entropy(s_logits_l.detach(), targets)
             s_loss = criterion(s_logits_us, hard_pseudo_label)
-            print("s_loss: ", s_loss.item())
+            # print("s_loss: ", s_loss.item())
 
         s_scaler.scale(s_loss).backward()
         if args.grad_clip > 0:
@@ -244,6 +249,12 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
         t_losses_u.update(t_loss_u.item())
         t_losses_mpl.update(t_loss_mpl.item())
         mean_mask.update(mask.mean().item())
+
+        tqdm.write(
+            f"Teacher Loss: {t_losses.avg:.6f}\n" \
+            f"Student Loss: {s_losses.avg:.6f}\n" \
+            f"Teacher Loss MPL: {t_losses_mpl.avg:.6f}\n"
+        )
 
         batch_time.update(time.time() - end)
         # pbar.set_description(
@@ -307,6 +318,47 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
     #     wandb.log({"result/test_acc@1": args.best_top1})
 
 
+def validate(
+        model: nn.Module,
+        data_loader: DataLoader,
+        device: torch.device
+) -> None:
+    predictions = []
+    for batch in data_loader:
+        images, targets = batch
+        images = images.to(device)
+        targets = targets.to(device)
+        logits = model(images)
+        probs = torch.softmax(logits, dim = 1)
+        preds = torch.argmax(probs, dim = 1)
+        predictions.extend(preds.to("cpu").numpy())
+    return predictions
+
+
+def evaluate(
+        model: nn.Module,
+        data_loader: DataLoader,
+        criterion: nn.Module,
+        device: torch.device
+) -> float:
+    model.eval()
+    total_loss = 0
+    total_accuracy = 0
+    with torch.inference_mode():
+        for batch in data_loader:
+            images, targets = batch
+            images = images.to(device)
+            targets = targets.to(device)
+            logits = model(images)
+            loss = criterion(logits, targets)
+            total_loss += loss.item()
+            probs = torch.softmax(logits, dim = 1)
+            preds = torch.argmax(probs, dim = 1)
+            total_accuracy += torch.sum(preds == targets).item()
+    total_loss = total_loss / len(data_loader)
+    total_accuracy = total_accuracy / len(data_loader.dataset)
+    return total_loss, total_accuracy
+
 
 if __name__ == "__main__":
     args = parser.parse_args()
@@ -316,6 +368,10 @@ if __name__ == "__main__":
     labels_to_idx = {
         "Dangerous": 0,
         "NOT Dangerous": 1
+    }
+    idx_to_labels = {
+        0: "Dangerous",
+        1: "NOT Dangerous"
     }
 
     transform = transforms.Compose([
@@ -347,7 +403,7 @@ if __name__ == "__main__":
         num_workers = args.workers
     )
 
-    teacher_model = SimpleViT(
+    teacher_model = ViT(
         image_size = args.resize,
         patch_size = 32,
         num_classes = args.num_classes,
@@ -356,7 +412,7 @@ if __name__ == "__main__":
         heads = 16,
         mlp_dim = 2048
     )
-    student_model = SimpleViT(
+    student_model = ViT(
         image_size = args.resize,
         patch_size = 32,
         num_classes = args.num_classes,
@@ -365,6 +421,7 @@ if __name__ == "__main__":
         heads = 16,
         mlp_dim = 2048
     )
+
     teacher_model.to(args.device)
     student_model.to(args.device)
     criterion = utils.create_loss_fn(args)
@@ -420,3 +477,21 @@ if __name__ == "__main__":
         t_scaler = t_scaler,
         s_scaler = s_scaler
     )
+    
+    val_ouptut = validate(
+        model = student_model,
+        data_loader = val_dl,
+        device = args.device
+    )
+    for i, out in enumerate(val_ouptut):
+        valid_dataset.plot_sample(i, title = f"Prediction: {idx_to_labels[out]}")
+        plt.show()
+
+    test_loss, test_acc = evaluate(
+        model = student_model,
+        data_loader = test_dl,
+        criterion = torch.nn.CrossEntropyLoss(),
+        device = args.device
+    )
+    print(f"Test loss: {test_loss :.4f}")
+    print(f"Test accuracy: {test_acc * 100 :.2f}")
