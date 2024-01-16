@@ -1,11 +1,13 @@
 from pathlib import Path
 from torchvision.io import VideoReader, write_jpeg
+from torchvision.utils import save_image
+from torchvision.transforms import transforms
 import os
 import multiprocessing as mp
 import json
 import argparse
 import splitfolders
-from typing import Tuple
+from typing import List
 
 
 def worker(args) -> bool:
@@ -19,7 +21,13 @@ def worker(args) -> bool:
     Returns:
     bool: True if the video was successfully converted, False otherwise.
     """
-    video_path, save_path, quality, max_frames, sampling_step = args
+    video_path, save_path, resize, max_frames, sampling_step = args
+    resize = tuple(resize)
+    transform = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.Resize(resize),
+        transforms.ToTensor()
+    ])
     video_id = video_path.parent.stem
     reader = VideoReader(str(video_path), "video")
     print(f"Converting video {video_id}...")
@@ -29,8 +37,9 @@ def worker(args) -> bool:
         elif (count % sampling_step) != 0:
             continue
         image = frame["data"]
+        image = transform(image)
         fpath = save_path / f"{video_id}_{count}.jpg"
-        write_jpeg(image, str(fpath), quality)
+        save_image(image, str(fpath))
     print(f"Video {video_id} converted.")
     return True
 
@@ -60,14 +69,15 @@ def create_labelstudio_json(save_path: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_path", type = str, required = True, help = "Path to the dataset: /..../Dr(eye)ve")
+    parser.add_argument("--save_path", type = str, required=True, help = "Path to save the frames")
     parser.add_argument("--sampling_step", type = int, default = 10)
     parser.add_argument("--max_frames", type = int, default = None)
-    parser.add_argument("--quality", type = int, default = 50)
+    parser.add_argument("--resize", type = int, nargs=2, default = [192, 108])
     parser.add_argument("--n_workers", type = int, default = os.cpu_count())
     args = parser.parse_args()
 
     dataset_path = Path(args.dataset_path) / "DREYEVE_DATA"
-    save_path = dataset_path / "data_frames"
+    save_path = Path(args.save_path) / "dreyeve"
     save_path.mkdir(exist_ok = True)
 
     # Get all video paths
@@ -78,7 +88,7 @@ if __name__ == "__main__":
     worker_args = [(
         video_path,
         save_path,
-        args.quality,
+        args.resize,
         args.max_frames,
         args.sampling_step
     ) for video_path in video_paths]
