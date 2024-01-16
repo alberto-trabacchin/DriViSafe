@@ -3,6 +3,7 @@ import os
 import logging
 import random
 import warnings
+import sys
 
 import numpy as np
 import torch
@@ -15,7 +16,7 @@ import torch.multiprocessing as mp
 from utils import net_builder, get_logger, count_parameters, over_write_args_from_file
 from train_utils import TBLog, get_optimizer, get_cosine_schedule_with_warmup
 from models.flexmatch.flexmatch import FlexMatch
-from datasets.ssl_dataset import SSL_Dataset, ImageNetLoader
+from datasets.ssl_dataset import SSL_Dataset, ImageNetLoader, DreyeveLoader
 from datasets.data_utils import get_data_loader
 
 
@@ -185,8 +186,8 @@ def main_worker(gpu, ngpus_per_node, args):
         torch.distributed.barrier()
  
     # Construct Dataset & DataLoader
-    if args.dataset.lower() != "imagenet":
-        if args.num_labels == 10 and args.dataset == 'cifar10':
+    if args.dataset == 'cifar10':
+        if args.num_labels == 10:
             fixmatch_index = [
                 [7408, 8148, 9850, 10361, 33949, 36506, 37018, 45044, 46443, 47447], 
                 [5022, 8193, 8902, 9601, 25226, 26223, 34089, 35186, 40595, 48024], 
@@ -201,23 +202,33 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             index = None
 
-
         train_dset = SSL_Dataset(args, alg='flexmatch', name=args.dataset, train=True,
                                 num_classes=args.num_classes, data_dir=args.data_dir)
         lb_dset, ulb_dset = train_dset.get_ssl_dset(args.num_labels, index=index)
         _eval_dset = SSL_Dataset(args, alg='flexmatch', name=args.dataset, train=False,
                                 num_classes=args.num_classes, data_dir=args.data_dir)
         eval_dset = _eval_dset.get_dset()
-    else:
+
+    elif args.dataset.lower() == "imagenet":
         image_loader = ImageNetLoader(root_path=args.data_dir, num_labels=args.num_labels,
                                       num_class=args.num_classes)
         lb_dset = image_loader.get_lb_train_data()
         ulb_dset = image_loader.get_ulb_train_data()
         eval_dset = image_loader.get_lb_test_data()
+
+    elif args.dataset.lower() == "dreyeve":
+        image_loader = DreyeveLoader(root_path=args.data_dir, num_labels=args.num_labels,
+                                      num_class=args.num_classes)
+        lb_dset = image_loader.get_lb_train_data()
+        ulb_dset = image_loader.get_ulb_train_data()
+        eval_dset = image_loader.get_lb_test_data()
+    
+    else:
+        sys.exit("Error selecting the dataset.")
+
     if args.rank == 0 and args.distributed:
         torch.distributed.barrier()
  
-    
     loader_dict = {}
     dset_dict = {'train_lb': lb_dset, 'train_ulb': ulb_dset, 'eval': eval_dset}
 
@@ -357,7 +368,7 @@ if __name__ == "__main__":
                         help='seed for initializing training. ')
     parser.add_argument('--gpu', default=None, type=int,
                         help='GPU id to use.')
-    parser.add_argument('--multiprocessing-distributed', type=str2bool, default=True,
+    parser.add_argument('--multiprocessing-distributed', type=str2bool, default=False,
                         help='Use multi-processing distributed training to launch '
                              'N processes per node, which has N GPUs. This is the '
                              'fastest way to use PyTorch for either single node or '

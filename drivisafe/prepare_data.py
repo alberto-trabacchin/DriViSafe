@@ -56,7 +56,7 @@ def create_labelstudio_json(save_path: Path) -> None:
     None
     """
     print("Generating local-storage.json...")
-    frame_names = [f.name for f in save_path.iterdir() if f.is_file()]
+    frame_names = [f.name for f in (save_path / "dreyeve").iterdir() if f.is_file()]
     data = []
     for f in frame_names:
         lab_studio_frame_path = "/data/local-files?d=Dr(eye)ve/dreyeve/" + str(f)
@@ -83,6 +83,8 @@ if __name__ == "__main__":
 
     # Get all video paths
     video_paths = [(f / "video_garmin.avi") for f in dataset_path.iterdir() if f.is_dir()]
+    create_labelstudio_json(save_path = Path(args.dataset_path))
+    exit()
 
     # Convert videos to frames (parallelized)
     p = mp.Pool(processes = args.n_workers)

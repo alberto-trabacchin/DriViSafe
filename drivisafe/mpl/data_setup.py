@@ -381,7 +381,7 @@ if __name__ == "__main__":
     # Create the datasets
     train_lab_dataset, train_unlab_dataset, test_dataset, valid_dataset = make_datasets(
         root_path = Path(args.dataset_path),
-        frames_path = Path(args.dataset_path) / "data_frames",
+        frames_path = Path(args.dataset_path) / "dreyeve",
         annot_path = Path(args.dataset_path) / "data_annotations.json",
         train_lab_size = args.train_lab_size,
         test_size = args.test_size,

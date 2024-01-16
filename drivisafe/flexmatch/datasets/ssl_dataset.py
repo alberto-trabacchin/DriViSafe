@@ -188,6 +188,134 @@ def get_transform(mean, std, crop_size, train=True):
                                    transforms.Normalize(mean, std)])
 
 
+class DreyeveDataset(torchvision.datasets.ImageFolder):
+    def __init__(self, root, transform, ulb, num_labels=-1):
+        super().__init__(root, transform)
+        self.ulb = ulb
+        self.num_labels = num_labels
+        is_valid_file = None
+        extensions = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp')
+        classes, class_to_idx = self._find_classes(self.root)
+        samples = self.make_dataset(self.root, class_to_idx, extensions, is_valid_file)
+        if len(samples) == 0:
+            msg = "Found 0 files in subfolders of: {}\n".format(self.root)
+            if extensions is not None:
+                msg += "Supported extensions are: {}".format(",".join(extensions))
+            raise RuntimeError(msg)
+
+        self.loader = default_loader
+        self.extensions = extensions
+
+        self.classes = classes
+        self.class_to_idx = class_to_idx
+        self.samples = samples
+        self.targets = [s[1] for s in samples]
+
+        if self.ulb:
+            self.strong_transform = copy.deepcopy(transform)
+            self.strong_transform.transforms.insert(0, RandAugment(3, 5))
+
+    def __getitem__(self, index):
+        path, target = self.samples[index]
+        sample = self.loader(path)
+        if self.transform is not None:
+            sample_transformed = self.transform(sample)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return (index, sample_transformed, target) if not self.ulb else (
+            index, sample_transformed, self.strong_transform(sample))
+
+    def make_dataset(
+            self,
+            directory,
+            class_to_idx,
+            extensions=None,
+            is_valid_file=None,
+    ):
+        instances = []
+        directory = os.path.expanduser(directory)
+        both_none = extensions is None and is_valid_file is None
+        both_something = extensions is not None and is_valid_file is not None
+        if both_none or both_something:
+            raise ValueError("Both extensions and is_valid_file cannot be None or not None at the same time")
+        if extensions is not None:
+            def is_valid_file(x: str) -> bool:
+                return x.lower().endswith(extensions)
+
+        lb_idx = {}
+
+        for target_class in sorted(class_to_idx.keys()):
+            class_index = class_to_idx[target_class]
+            target_dir = os.path.join(directory, target_class)
+            if not os.path.isdir(target_dir):
+                continue
+            for root, _, fnames in sorted(os.walk(target_dir, followlinks=True)):
+                random.shuffle(fnames)
+                if self.num_labels != -1:
+                    fnames = fnames[:self.num_labels]
+                if self.num_labels != -1:
+                    lb_idx[target_class] = fnames
+                for fname in fnames:
+                    path = os.path.join(root, fname)
+                    if is_valid_file(path):
+                        item = path, class_index
+                        instances.append(item)
+        if self.num_labels != -1:
+            with open('./sampled_label_idx.json', 'w') as f:
+                json.dump(lb_idx, f)
+        del lb_idx
+        gc.collect()
+        return instances
+
+
+class DreyeveLoader:
+    def __init__(self, root_path, num_labels=-1, num_class=2):
+        self.root_path = os.path.join(root_path, 'dreyeve')
+        self.num_labels = num_labels // num_class
+
+    def get_transform(self, train, ulb):
+        if train:
+            transform = transforms.Compose([
+                transforms.Resize([256, 256]),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomCrop(224, padding=4, padding_mode='reflect'),
+                transforms.ToTensor(),
+                transforms.Normalize(mean["imagenet"], std["imagenet"])])
+        else:
+            transform = transforms.Compose([
+                transforms.Resize([224, 224]),
+                transforms.ToTensor(),
+                transforms.Normalize(mean["imagenet"], std["imagenet"])])
+        return transform
+
+    def get_lb_train_data(self):
+        transform = self.get_transform(train=True, ulb=False)
+        data = ImagenetDataset(root=os.path.join(self.root_path, "train"), transform=transform, ulb=False,
+                               num_labels=self.num_labels)
+        return data
+
+    def get_ulb_train_data(self):
+        transform = self.get_transform(train=True, ulb=True)
+        data = ImagenetDataset(root=os.path.join(self.root_path, "train"), transform=transform, ulb=True)
+        return data
+
+    def get_lb_test_data(self):
+        transform = self.get_transform(train=False, ulb=False)
+        data = ImagenetDataset(root=os.path.join(self.root_path, "val"), transform=transform, ulb=False)
+        return data
+
+
+def get_transform(mean, std, crop_size, train=True):
+    if train:
+        return transforms.Compose([transforms.RandomHorizontalFlip(),
+                                   transforms.RandomCrop(crop_size, padding=4, padding_mode='reflect'),
+                                   transforms.ToTensor(),
+                                   transforms.Normalize(mean, std)])
+    else:
+        return transforms.Compose([transforms.ToTensor(),
+                                   transforms.Normalize(mean, std)])
+
+
 class SSL_Dataset:
     """
     SSL_Dataset class gets dataset from torchvision.datasets,
