@@ -22,12 +22,6 @@ def worker(args) -> bool:
     bool: True if the video was successfully converted, False otherwise.
     """
     video_path, save_path, resize, max_frames, sampling_step = args
-    resize = tuple(resize)
-    transform = transforms.Compose([
-        transforms.ToPILImage(),
-        transforms.Resize(resize),
-        transforms.ToTensor()
-    ])
     video_id = video_path.parent.stem
     reader = VideoReader(str(video_path), "video")
     print(f"Converting video {video_id}...")
@@ -36,8 +30,15 @@ def worker(args) -> bool:
             break
         elif (count % sampling_step) != 0:
             continue
-        image = frame["data"]
-        image = transform(image)
+        image = frame["data"].float().div(255)
+        if resize is not None:
+            resize = tuple(resize)
+            transform = transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.Resize(resize),
+                transforms.ToTensor()
+            ])
+            image = transform(image)
         fpath = save_path / f"{video_id}_{count}.jpg"
         save_image(image, str(fpath))
     print(f"Video {video_id} converted.")
@@ -58,7 +59,7 @@ def create_labelstudio_json(save_path: Path) -> None:
     frame_names = [f.name for f in save_path.iterdir() if f.is_file()]
     data = []
     for f in frame_names:
-        lab_studio_frame_path = "/data/local-files?d=Dr(eye)ve/data_frames/" + str(f)
+        lab_studio_frame_path = "/data/local-files?d=Dr(eye)ve/dreyeve/" + str(f)
         data.append({"image": [str(lab_studio_frame_path)]})
     loc_storage_path = str(save_path / "local-storage.json")
     with open(loc_storage_path, "w") as f:
@@ -72,7 +73,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_path", type = str, required=True, help = "Path to save the frames")
     parser.add_argument("--sampling_step", type = int, default = 10)
     parser.add_argument("--max_frames", type = int, default = None)
-    parser.add_argument("--resize", type = int, nargs=2, default = [192, 108])
+    parser.add_argument("--resize", type = int, nargs=2, default =None, help="Resize the frames to the given size: (height, width)")
     parser.add_argument("--n_workers", type = int, default = os.cpu_count())
     args = parser.parse_args()
 
