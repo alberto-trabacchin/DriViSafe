@@ -16,11 +16,12 @@ from tqdm import tqdm
 import logging
 import time
 from torch.nn import functional as F
+from drivisafe.mpl import data_setup
 from drivisafe.utils import AverageMeter
 from matplotlib import pyplot as plt
 from typing import Tuple
 
-from drivisafe import data_setup, utils
+from drivisafe import utils
 
 logger = logging.getLogger(__name__)
 
