@@ -79,7 +79,7 @@ if __name__ == "__main__":
 
     dataset_path = Path(args.dataset_path) / "DREYEVE_DATA"
     save_path = Path(args.save_path) / "dreyeve"
-    save_path.mkdir(exist_ok = True)
+    save_path.mkdir(exist_ok = True, parents = True)
 
     # Get all video paths
     video_paths = [(f / "video_garmin.avi") for f in dataset_path.iterdir() if f.is_dir()]

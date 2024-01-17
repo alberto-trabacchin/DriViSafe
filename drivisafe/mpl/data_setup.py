@@ -368,14 +368,13 @@ if __name__ == "__main__":
 
     # Dict to map labels to indices
     labels_to_idx = {
-        "Dangerous": 0,
-        "NOT Dangerous": 1
+        "Safe": 0,
+        "Dangerous": 1
     }
     
     # Transform to apply to the images
     transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Resize((108, 192), antialias = True)
+        transforms.ToTensor()
     ])
 
     # Create the datasets

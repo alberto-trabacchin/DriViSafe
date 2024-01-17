@@ -194,7 +194,8 @@ class DreyeveDataset(torchvision.datasets.ImageFolder):
         self.ulb = ulb
         self.num_labels = num_labels
         is_valid_file = None
-        extensions = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp')
+        extensions = ('.jpg')
+        # Need to initialize manually classes and class_to_idx
         classes, class_to_idx = self._find_classes(self.root)
         samples = self.make_dataset(self.root, class_to_idx, extensions, is_valid_file)
         if len(samples) == 0:
@@ -210,10 +211,6 @@ class DreyeveDataset(torchvision.datasets.ImageFolder):
         self.class_to_idx = class_to_idx
         self.samples = samples
         self.targets = [s[1] for s in samples]
-
-        if self.ulb:
-            self.strong_transform = copy.deepcopy(transform)
-            self.strong_transform.transforms.insert(0, RandAugment(3, 5))
 
     def __getitem__(self, index):
         path, target = self.samples[index]
@@ -274,34 +271,25 @@ class DreyeveLoader:
         self.num_labels = num_labels // num_class
 
     def get_transform(self, train, ulb):
-        if train:
-            transform = transforms.Compose([
-                transforms.Resize([256, 256]),
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomCrop(224, padding=4, padding_mode='reflect'),
-                transforms.ToTensor(),
-                transforms.Normalize(mean["imagenet"], std["imagenet"])])
-        else:
-            transform = transforms.Compose([
-                transforms.Resize([224, 224]),
-                transforms.ToTensor(),
-                transforms.Normalize(mean["imagenet"], std["imagenet"])])
+        transform = transforms.Compose([
+            transforms.ToTensor()
+        ])
         return transform
 
     def get_lb_train_data(self):
         transform = self.get_transform(train=True, ulb=False)
-        data = ImagenetDataset(root=os.path.join(self.root_path, "train"), transform=transform, ulb=False,
+        data = DreyeveDataset(root=os.path.join(self.root_path, "train"), transform=transform, ulb=False,
                                num_labels=self.num_labels)
         return data
 
     def get_ulb_train_data(self):
         transform = self.get_transform(train=True, ulb=True)
-        data = ImagenetDataset(root=os.path.join(self.root_path, "train"), transform=transform, ulb=True)
+        data = DreyeveDataset(root=os.path.join(self.root_path, "train"), transform=transform, ulb=True)
         return data
 
     def get_lb_test_data(self):
         transform = self.get_transform(train=False, ulb=False)
-        data = ImagenetDataset(root=os.path.join(self.root_path, "val"), transform=transform, ulb=False)
+        data = DreyeveDataset(root=os.path.join(self.root_path, "val"), transform=transform, ulb=False)
         return data
 
 
