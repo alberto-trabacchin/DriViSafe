@@ -163,10 +163,9 @@ def split_data(
         lab_data: List[Path],
         unlab_data: List[Path],
         labels: List[int],
-        train_lab_size: float,
-        test_size: float,
-        train_unlab_size: float,
-        val_size: float,
+        num_lb_train: int,
+        num_test: int,
+        num_val: int,
         shuffle: bool,
         seed: int
 ) -> Tuple[List[Path], List[Path], List[Path], List[Path], List[int], List[int]]:
@@ -187,9 +186,11 @@ def split_data(
     Returns:
         Tuple[List[Path], List[Path], List[Path], List[Path], List[int], List[int]]: The training and testing sets.
     """
-    assert(len(lab_data) >= 2)
-    assert(train_lab_size + test_size <= 1)
-    assert(train_unlab_size + val_size <= 1)
+    assert(num_lb_train > 0)
+    assert(num_test > 0)
+    assert(num_val > 0)
+    assert(len(lab_data) >= num_lb_train + num_test)
+    assert(len(unlab_data) > num_val)
 
     # Shuffle the data
     if shuffle:
@@ -200,10 +201,10 @@ def split_data(
         lab_data, labels = zip(*lab_zip)
 
     # Calculate the sizes of the sets
-    train_lab_len = max(1, int(train_lab_size * len(lab_data)))
-    test_len = max(1, int(test_size * len(lab_data)))
-    train_unlab_len = max(1, int(train_unlab_size * len(unlab_data)))
-    val_len = max(1, int(val_size * len(unlab_data)))
+    train_lab_len = max(1, num_lb_train)
+    test_len = max(1, num_test)
+    val_len = max(1, num_val)
+    train_unlab_len = len(unlab_data) - val_len
     train_lab_idx = train_lab_len
     test_idx = train_lab_idx + test_len
     train_unlab_idx = train_unlab_len
@@ -227,10 +228,9 @@ def make_datasets(
         root_path: Path,
         frames_path: Path,
         annot_path: Path,
-        train_lab_size: float,
-        test_size: float,
-        train_unlab_size: float,
-        val_size: float,
+        train_lab_size: int,
+        test_size: int,
+        val_size: int,
         labels_to_idx: Dict[str, int],
         transform: transforms = None,
         shuffle: bool = True,
@@ -268,10 +268,9 @@ def make_datasets(
         lab_data = lab_data,
         unlab_data = unlab_data,
         labels = labels,
-        train_lab_size = train_lab_size,
-        test_size = test_size,
-        train_unlab_size = train_unlab_size,
-        val_size = val_size,
+        num_lb_train = train_lab_size,
+        num_test = test_size,
+        num_val = val_size,
         shuffle = shuffle,
         seed = seed
     )
@@ -356,10 +355,9 @@ def make_dataloaders(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_path", type = str, required = True, help = "Path to the dataset: /..../Dr(eye)ve")
-    parser.add_argument("--train_lab_size", type = float, default = 0.1, help = "Size of the labeled training set")
-    parser.add_argument("--test_size", type = float, default = 0.9, help = "Size of the testing set")
-    parser.add_argument("--train_unlab_size", type = float, default = 0.8, help = "Size of the unlabeled training set")
-    parser.add_argument("--val_size", type = float, default = 0.2, help = "Size of the validation set")
+    parser.add_argument("--num_lb_train", type = int, required=True, help = "Size of the labeled training set")
+    parser.add_argument("--num_val", type = int, required=True, help = "Size of the validation set")
+    parser.add_argument("--num_test", type = int, required=True, help = "Size of the testing set")
     parser.add_argument("--batch_size", type = int, default = 32, help = "Batch size")
     parser.add_argument("--shuffle", type = bool, default = True, help = "Whether to shuffle the data during training")
     parser.add_argument("--num_workers", type = int, default = 4, help = "Number of workers for the dataloader")
@@ -382,10 +380,9 @@ if __name__ == "__main__":
         root_path = Path(args.dataset_path),
         frames_path = Path(args.dataset_path) / "dreyeve",
         annot_path = Path(args.dataset_path) / "data_annotations.json",
-        train_lab_size = args.train_lab_size,
-        test_size = args.test_size,
-        train_unlab_size = args.train_unlab_size,
-        val_size = args.val_size,
+        train_lab_size = args.num_lb_train,
+        test_size = args.num_test,
+        val_size = args.num_val,
         transform = transform,
         labels_to_idx = labels_to_idx,
         shuffle = True,
@@ -404,12 +401,17 @@ if __name__ == "__main__":
     )
 
     # Plot a sample image from the test dataset
-    test_dataset.plot_sample(index = 1)
+    test_dataset.plot_sample(index = 0)
     plt.show()
     X, y = test_dataset[0]
-    print(X.shape, y.shape)
-    print(y)
-    print(type(X), type(y))
+    print("Sample shapes: ", X.shape, y.shape)
+    print("Sample output", y)
+    print("Sample data types:", type(X), type(y))
 
     images, targets = next(iter(test_dl))
-    print(targets)
+    print("Batch targets: ", targets)
+
+    print("\nTrain labeled dataset samples: ", len(train_lab_dataset))
+    print("Train unlabeled dataset samples: ", len(train_unlab_dataset))
+    print("Validation dataset samples: ", len(valid_dataset))
+    print("Test dataset samples: ", len(test_dataset))
