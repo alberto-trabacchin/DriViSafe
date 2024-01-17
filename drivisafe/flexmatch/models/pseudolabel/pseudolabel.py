@@ -1,68 +1,57 @@
-import pickle
-import json
 import torch
 import numpy as np
-import pandas as pd
-import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.models as models
 from torch.cuda.amp import autocast, GradScaler
-from collections import Counter
+
 import os
 import contextlib
-from train_utils import AverageMeter
-
-from .flexmatch_utils import consistency_loss, Get_Scalar
-from train_utils import ce_loss, wd_loss, EMA, Bn_Controller
+from train_utils import EMA, Bn_Controller
+from collections import Counter
+from .pseudolabel_utils import consistency_loss
+from train_utils import ce_loss, wd_loss
 
 from sklearn.metrics import *
 from copy import deepcopy
 
 
-class FlexMatch:
-    def __init__(self, net_builder, num_classes, ema_m, T, p_cutoff, lambda_u, \
-                 hard_label=True, t_fn=None, p_fn=None, it=0, num_eval_iter=1000, tb_log=None, logger=None):
+class PseudoLabel:
+    def __init__(self, net_builder, num_classes, lambda_u,
+                 num_eval_iter=1000, tb_log=None, ema_m=0.999, logger=None):
         """
-        class Flexmatch contains setter of data_loader, optimizer, and model update methods.
+        class PseudoLabel contains setter of data_loader, optimizer, and model update methods.
         Args:
             net_builder: backbone network class (see net_builder in utils.py)
             num_classes: # of label classes 
-            ema_m: momentum of exponential moving average for eval_model
-            T: Temperature scaling parameter for output sharpening (only when hard_label = False)
-            p_cutoff: confidence cutoff parameters for loss masking
             lambda_u: ratio of unsupervised loss to supervised loss
-            hard_label: If True, consistency regularization use a hard pseudo label.
             it: initial iteration count
-            num_eval_iter: freqeuncy of iteration (after 500,000 iters)
+            num_eval_iter: frequency of evaluation.
             tb_log: tensorboard writer (see train_utils.py)
             logger: logger (see utils.py)
         """
 
-        super(FlexMatch, self).__init__()
+        super(PseudoLabel, self).__init__()
 
         # momentum update param
         self.loader = {}
         self.num_classes = num_classes
-        self.ema_m = ema_m
 
+        self.ema_m = ema_m
         # create the encoders
         # network is builded only by num_classes,
         # other configs are covered in main.py
 
         self.model = net_builder(num_classes=num_classes)
-        self.ema_model = None
+        self.ema_model = deepcopy(self.model)
 
         self.num_eval_iter = num_eval_iter
-        self.t_fn = Get_Scalar(T)  # temperature params function
-        self.p_fn = Get_Scalar(p_cutoff)  # confidence cutoff function
         self.lambda_u = lambda_u
         self.tb_log = tb_log
-        self.use_hard_label = hard_label
 
         self.optimizer = None
         self.scheduler = None
 
         self.it = 0
+
         self.logger = logger
         self.print_fn = print if logger is None else logger.info
 
@@ -79,31 +68,16 @@ class FlexMatch:
         self.optimizer = optimizer
         self.scheduler = scheduler
 
-    def train(self, args, logger=None):
+    def train(self, args):
 
         ngpus_per_node = torch.cuda.device_count()
 
-        # EMA Init
+        # EMA init
         self.model.train()
         self.ema = EMA(self.model, self.ema_m)
         self.ema.register()
         if args.resume == True:
             self.ema.load(self.ema_model)
-
-        # p(y) based on the labeled examples seen during training
-        dist_file_name = r"./data_statistics/" + args.dataset + '_' + str(args.num_labels) + '.json'
-        if args.dataset.upper() == 'IMAGENET':
-            p_target = None
-        elif args.dataset.lower() == "dreyeve":
-            p_target = None
-        else:
-            with open(dist_file_name, 'r') as f:
-                p_target = json.loads(f.read())
-                p_target = torch.tensor(p_target['distribution'])
-                p_target = p_target.cuda(args.gpu)
-            # print('p_target:', p_target)
-
-        p_model = None
 
         # for gpu profiling
         start_batch = torch.cuda.Event(enable_timing=True)
@@ -121,67 +95,48 @@ class FlexMatch:
         if args.resume == True:
             eval_dict = self.evaluate(args=args)
             print(eval_dict)
-    
+
         selected_label = torch.ones((len(self.ulb_dset),), dtype=torch.long, ) * -1
         selected_label = selected_label.cuda(args.gpu)
-
         classwise_acc = torch.zeros((args.num_classes,)).cuda(args.gpu)
 
-        for (_, x_lb, y_lb), (x_ulb_idx, x_ulb_w, x_ulb_s) in zip(self.loader_dict['train_lb'],
-                                                                  self.loader_dict['train_ulb']):
-            
+        for (_, x_lb, y_lb), (x_ulb_idx, x_ulb_w) in zip(self.loader_dict['train_lb'], self.loader_dict['train_ulb']):
+
             # prevent the training iterations exceed args.num_train_iter
             if self.it > args.num_train_iter:
                 break
-
+            unsup_warmup = np.clip(self.it / (args.unsup_warmup_pos * args.num_train_iter),
+                                   a_min=0.0, a_max=1.0)
             end_batch.record()
             torch.cuda.synchronize()
             start_run.record()
 
-            num_lb = x_lb.shape[0]
-            num_ulb = x_ulb_w.shape[0]
-            assert (num_ulb == x_ulb_s.shape[0])
-
-            x_lb, x_ulb_w, x_ulb_s = x_lb.cuda(args.gpu), x_ulb_w.cuda(args.gpu), x_ulb_s.cuda(args.gpu)
+            x_lb, x_ulb_w = x_lb.cuda(args.gpu), x_ulb_w.cuda(args.gpu)
             x_ulb_idx = x_ulb_idx.cuda(args.gpu)
             y_lb = y_lb.cuda(args.gpu)
 
-            pseudo_counter = Counter(selected_label.tolist())
-            if max(pseudo_counter.values()) < len(self.ulb_dset):  # not all(5w) -1
-                if args.thresh_warmup:
+            num_lb = x_lb.shape[0]
+            if args.use_flex:
+                pseudo_counter = Counter(selected_label.tolist())
+                if max(pseudo_counter.values()) < len(self.ulb_dset):  # not all(5w) -1
                     for i in range(args.num_classes):
                         classwise_acc[i] = pseudo_counter[i] / max(pseudo_counter.values())
-                else:
-                    wo_negative_one = deepcopy(pseudo_counter)
-                    if -1 in wo_negative_one.keys():
-                        wo_negative_one.pop(-1)
-                    for i in range(args.num_classes):
-                        classwise_acc[i] = pseudo_counter[i] / max(wo_negative_one.values())
-            inputs = torch.cat((x_lb, x_ulb_w, x_ulb_s))
 
             # inference and calculate sup/unsup losses
             with amp_cm():
-                logits = self.model(inputs)
-                logits_x_lb = logits[:num_lb]
-                logits_x_ulb_w, logits_x_ulb_s = logits[num_lb:].chunk(2)
+
+                logits_x_lb = self.model(x_lb)
+                self.bn_controller.freeze_bn(self.model)
+                logits_x_ulb_w = self.model(x_ulb_w)
+                self.bn_controller.unfreeze_bn(self.model)
+
                 sup_loss = ce_loss(logits_x_lb, y_lb, reduction='mean')
-
-                # hyper-params for update
-                T = self.t_fn(self.it)
-                p_cutoff = self.p_fn(self.it)
-                unsup_loss, mask, select, pseudo_lb, p_model = consistency_loss(logits_x_ulb_s,
-                                                                                logits_x_ulb_w,
-                                                                                classwise_acc,
-                                                                                p_target,
-                                                                                p_model,
-                                                                                'ce', T, p_cutoff,
-                                                                                use_hard_labels=args.hard_label,
-                                                                                use_DA=args.use_DA)
-
+                unsup_loss, select, pseudo_lb = consistency_loss(logits_x_ulb_w, classwise_acc, self.it, args.dataset,
+                                                                 args.p_cutoff, use_flex=args.use_flex)
                 if x_ulb_idx[select == 1].nelement() != 0:
                     selected_label[x_ulb_idx[select == 1]] = pseudo_lb[select == 1]
 
-                total_loss = sup_loss + self.lambda_u * unsup_loss
+                total_loss = sup_loss + self.lambda_u * unsup_loss * unsup_warmup
 
             # parameter updates
             if args.amp:
@@ -209,12 +164,11 @@ class FlexMatch:
             tb_dict['train/sup_loss'] = sup_loss.detach()
             tb_dict['train/unsup_loss'] = unsup_loss.detach()
             tb_dict['train/total_loss'] = total_loss.detach()
-            tb_dict['train/mask_ratio'] = 1.0 - mask.detach()
             tb_dict['lr'] = self.optimizer.param_groups[0]['lr']
             tb_dict['train/prefecth_time'] = start_batch.elapsed_time(end_batch) / 1000.
             tb_dict['train/run_time'] = start_run.elapsed_time(end_run) / 1000.
 
-            # Save model for each 10K steps and best model for each 1K steps
+            # save model for each 10K steps and best model for each 1K steps
             if self.it % 10000 == 0:
                 save_path = os.path.join(args.save_dir, args.save_name)
                 if not args.multiprocessing_distributed or \
@@ -224,18 +178,22 @@ class FlexMatch:
             if self.it % self.num_eval_iter == 0:
                 eval_dict = self.evaluate(args=args)
                 tb_dict.update(eval_dict)
+
                 save_path = os.path.join(args.save_dir, args.save_name)
+
                 if tb_dict['eval/top-1-acc'] > best_eval_acc:
                     best_eval_acc = tb_dict['eval/top-1-acc']
                     best_it = self.it
+
                 self.print_fn(
-                    f"{self.it} iteration, USE_EMA: {self.ema_m != 0}, {tb_dict}, BEST_EVAL_ACC: {best_eval_acc}, at {best_it} iters")
+                    f"{self.it} iteration, {tb_dict}, BEST_EVAL_ACC: {best_eval_acc}, at {best_it} iters")
 
                 if not args.multiprocessing_distributed or \
                         (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0):
 
                     if self.it == best_it:
                         self.save_model('model_best.pth', save_path)
+
                     if not self.tb_log is None:
                         self.tb_log.update(tb_dict, self.it)
 
@@ -266,35 +224,26 @@ class FlexMatch:
             total_num += num_batch
             logits = self.model(x)
             loss = F.cross_entropy(logits, y, reduction='mean')
-            # print("\nlogits\n", logits)
-            # print("\ntarget\n", y)
-            # print("\nloss\n", loss)
             y_true.extend(y.cpu().tolist())
             y_pred.extend(torch.max(logits, dim=-1)[1].cpu().tolist())
             y_logits.extend(torch.softmax(logits, dim=-1).cpu().tolist())
             total_loss += loss.detach() * num_batch
         top1 = accuracy_score(y_true, y_pred)
-
-        if args.dataset.lower() == "dreyeve":
-            top5 = -1
-            AUC = -1
-            recall = -1
-            precision = -1
-        else:
-            top5 = top_k_accuracy_score(y_true, y_logits, k=5)
-            AUC = roc_auc_score(y_true, y_logits, multi_class='ovo')
-            recall = recall_score(y_true, y_pred, average='macro')
-            precision = precision_score(y_true, y_pred, average='macro')
+        top5 = top_k_accuracy_score(y_true, y_logits, k=5)
+        precision = precision_score(y_true, y_pred, average='macro')
+        recall = recall_score(y_true, y_pred, average='macro')
         F1 = f1_score(y_true, y_pred, average='macro')
-
+        AUC = roc_auc_score(y_true, y_logits, multi_class='ovo')
         cf_mat = confusion_matrix(y_true, y_pred, normalize='true')
-        # self.print_fn('confusion matrix:\n' + np.array_str(cf_mat))
+        self.print_fn('confusion matrix:\n' + np.array_str(cf_mat))
         self.ema.restore()
         self.model.train()
         return {'eval/loss': total_loss / total_num, 'eval/top-1-acc': top1, 'eval/top-5-acc': top5,
                 'eval/precision': precision, 'eval/recall': recall, 'eval/F1': F1, 'eval/AUC': AUC}
 
     def save_model(self, save_name, save_path):
+        if self.it < 1000000:
+            return
         save_filename = os.path.join(save_path, save_name)
         # copy EMA parameters to ema_model for saving with model as temp
         self.model.eval()
@@ -316,13 +265,13 @@ class FlexMatch:
         checkpoint = torch.load(load_path)
 
         self.model.load_state_dict(checkpoint['model'])
-        self.ema_model = deepcopy(self.model)
-        self.ema_model.load_state_dict(checkpoint['ema_model'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
         self.scheduler.load_state_dict(checkpoint['scheduler'])
         self.it = checkpoint['it']
+        self.ema_model.load_state_dict(checkpoint['ema_model'])
         self.print_fn('model loaded')
 
+    # Abandoned in Pseudo Label
     def interleave_offsets(self, batch, nu):
         groups = [batch // (nu + 1)] * (nu + 1)
         for x in range(batch - sum(groups)):

@@ -102,4 +102,4 @@ if __name__ == "__main__":
     assert(all(results))
 
     # Create local-storage.json to load frames into Label Studio
-    create_labelstudio_json(save_path = args.dataset_path)
+    create_labelstudio_json(save_path = Path(args.dataset_path))

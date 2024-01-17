@@ -1,5 +1,5 @@
 import pickle
-import json
+
 import torch
 import numpy as np
 import pandas as pd
@@ -12,21 +12,21 @@ import os
 import contextlib
 from train_utils import AverageMeter
 
-from .flexmatch_utils import consistency_loss, Get_Scalar
+from .fixmatch_utils import consistency_loss, Get_Scalar
 from train_utils import ce_loss, wd_loss, EMA, Bn_Controller
 
 from sklearn.metrics import *
 from copy import deepcopy
 
 
-class FlexMatch:
+class FixMatch:
     def __init__(self, net_builder, num_classes, ema_m, T, p_cutoff, lambda_u, \
                  hard_label=True, t_fn=None, p_fn=None, it=0, num_eval_iter=1000, tb_log=None, logger=None):
         """
-        class Flexmatch contains setter of data_loader, optimizer, and model update methods.
+        class Fixmatch contains setter of data_loader, optimizer, and model update methods.
         Args:
             net_builder: backbone network class (see net_builder in utils.py)
-            num_classes: # of label classes 
+            num_classes: # of label classes
             ema_m: momentum of exponential moving average for eval_model
             T: Temperature scaling parameter for output sharpening (only when hard_label = False)
             p_cutoff: confidence cutoff parameters for loss masking
@@ -38,7 +38,7 @@ class FlexMatch:
             logger: logger (see utils.py)
         """
 
-        super(FlexMatch, self).__init__()
+        super(FixMatch, self).__init__()
 
         # momentum update param
         self.loader = {}
@@ -63,6 +63,9 @@ class FlexMatch:
         self.scheduler = None
 
         self.it = 0
+        self.lst = [[] for i in range(10)]
+        self.abs_lst = [[] for i in range(10)]
+        self.clsacc = [[] for i in range(10)]
         self.logger = logger
         self.print_fn = print if logger is None else logger.info
 
@@ -90,21 +93,6 @@ class FlexMatch:
         if args.resume == True:
             self.ema.load(self.ema_model)
 
-        # p(y) based on the labeled examples seen during training
-        dist_file_name = r"./data_statistics/" + args.dataset + '_' + str(args.num_labels) + '.json'
-        if args.dataset.upper() == 'IMAGENET':
-            p_target = None
-        elif args.dataset.lower() == "dreyeve":
-            p_target = None
-        else:
-            with open(dist_file_name, 'r') as f:
-                p_target = json.loads(f.read())
-                p_target = torch.tensor(p_target['distribution'])
-                p_target = p_target.cuda(args.gpu)
-            # print('p_target:', p_target)
-
-        p_model = None
-
         # for gpu profiling
         start_batch = torch.cuda.Event(enable_timing=True)
         end_batch = torch.cuda.Event(enable_timing=True)
@@ -121,7 +109,7 @@ class FlexMatch:
         if args.resume == True:
             eval_dict = self.evaluate(args=args)
             print(eval_dict)
-    
+
         selected_label = torch.ones((len(self.ulb_dset),), dtype=torch.long, ) * -1
         selected_label = selected_label.cuda(args.gpu)
 
@@ -129,7 +117,8 @@ class FlexMatch:
 
         for (_, x_lb, y_lb), (x_ulb_idx, x_ulb_w, x_ulb_s) in zip(self.loader_dict['train_lb'],
                                                                   self.loader_dict['train_ulb']):
-            
+
+
             # prevent the training iterations exceed args.num_train_iter
             if self.it > args.num_train_iter:
                 break
@@ -140,23 +129,16 @@ class FlexMatch:
 
             num_lb = x_lb.shape[0]
             num_ulb = x_ulb_w.shape[0]
-            assert (num_ulb == x_ulb_s.shape[0])
+            assert num_ulb == x_ulb_s.shape[0]
 
             x_lb, x_ulb_w, x_ulb_s = x_lb.cuda(args.gpu), x_ulb_w.cuda(args.gpu), x_ulb_s.cuda(args.gpu)
-            x_ulb_idx = x_ulb_idx.cuda(args.gpu)
             y_lb = y_lb.cuda(args.gpu)
 
             pseudo_counter = Counter(selected_label.tolist())
             if max(pseudo_counter.values()) < len(self.ulb_dset):  # not all(5w) -1
-                if args.thresh_warmup:
-                    for i in range(args.num_classes):
-                        classwise_acc[i] = pseudo_counter[i] / max(pseudo_counter.values())
-                else:
-                    wo_negative_one = deepcopy(pseudo_counter)
-                    if -1 in wo_negative_one.keys():
-                        wo_negative_one.pop(-1)
-                    for i in range(args.num_classes):
-                        classwise_acc[i] = pseudo_counter[i] / max(wo_negative_one.values())
+                for i in range(args.num_classes):
+                    classwise_acc[i] = pseudo_counter[i] / max(pseudo_counter.values())
+
             inputs = torch.cat((x_lb, x_ulb_w, x_ulb_s))
 
             # inference and calculate sup/unsup losses
@@ -169,17 +151,11 @@ class FlexMatch:
                 # hyper-params for update
                 T = self.t_fn(self.it)
                 p_cutoff = self.p_fn(self.it)
-                unsup_loss, mask, select, pseudo_lb, p_model = consistency_loss(logits_x_ulb_s,
-                                                                                logits_x_ulb_w,
-                                                                                classwise_acc,
-                                                                                p_target,
-                                                                                p_model,
-                                                                                'ce', T, p_cutoff,
-                                                                                use_hard_labels=args.hard_label,
-                                                                                use_DA=args.use_DA)
 
-                if x_ulb_idx[select == 1].nelement() != 0:
-                    selected_label[x_ulb_idx[select == 1]] = pseudo_lb[select == 1]
+                unsup_loss, mask, select, pseudo_lb = consistency_loss(logits_x_ulb_s,
+                                                                       logits_x_ulb_w,
+                                                                       'ce', T, p_cutoff,
+                                                                       use_hard_labels=args.hard_label)
 
                 total_loss = sup_loss + self.lambda_u * unsup_loss
 
@@ -224,10 +200,13 @@ class FlexMatch:
             if self.it % self.num_eval_iter == 0:
                 eval_dict = self.evaluate(args=args)
                 tb_dict.update(eval_dict)
+
                 save_path = os.path.join(args.save_dir, args.save_name)
+
                 if tb_dict['eval/top-1-acc'] > best_eval_acc:
                     best_eval_acc = tb_dict['eval/top-1-acc']
                     best_it = self.it
+
                 self.print_fn(
                     f"{self.it} iteration, USE_EMA: {self.ema_m != 0}, {tb_dict}, BEST_EVAL_ACC: {best_eval_acc}, at {best_it} iters")
 
@@ -236,6 +215,7 @@ class FlexMatch:
 
                     if self.it == best_it:
                         self.save_model('model_best.pth', save_path)
+
                     if not self.tb_log is None:
                         self.tb_log.update(tb_dict, self.it)
 
@@ -266,29 +246,19 @@ class FlexMatch:
             total_num += num_batch
             logits = self.model(x)
             loss = F.cross_entropy(logits, y, reduction='mean')
-            # print("\nlogits\n", logits)
-            # print("\ntarget\n", y)
-            # print("\nloss\n", loss)
             y_true.extend(y.cpu().tolist())
             y_pred.extend(torch.max(logits, dim=-1)[1].cpu().tolist())
             y_logits.extend(torch.softmax(logits, dim=-1).cpu().tolist())
             total_loss += loss.detach() * num_batch
         top1 = accuracy_score(y_true, y_pred)
-
-        if args.dataset.lower() == "dreyeve":
-            top5 = -1
-            AUC = -1
-            recall = -1
-            precision = -1
-        else:
-            top5 = top_k_accuracy_score(y_true, y_logits, k=5)
-            AUC = roc_auc_score(y_true, y_logits, multi_class='ovo')
-            recall = recall_score(y_true, y_pred, average='macro')
-            precision = precision_score(y_true, y_pred, average='macro')
+        top5 = top_k_accuracy_score(y_true, y_logits, k=5)
+        precision = precision_score(y_true, y_pred, average='macro')
+        recall = recall_score(y_true, y_pred, average='macro')
         F1 = f1_score(y_true, y_pred, average='macro')
+        AUC = roc_auc_score(y_true, y_logits, multi_class='ovo')
 
         cf_mat = confusion_matrix(y_true, y_pred, normalize='true')
-        # self.print_fn('confusion matrix:\n' + np.array_str(cf_mat))
+        self.print_fn('confusion matrix:\n' + np.array_str(cf_mat))
         self.ema.restore()
         self.model.train()
         return {'eval/loss': total_loss / total_num, 'eval/top-1-acc': top1, 'eval/top-5-acc': top5,

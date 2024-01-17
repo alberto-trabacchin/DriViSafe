@@ -1,5 +1,6 @@
 import pickle
-import json
+
+
 import torch
 import numpy as np
 import pandas as pd
@@ -12,24 +13,22 @@ import os
 import contextlib
 from train_utils import AverageMeter
 
-from .flexmatch_utils import consistency_loss, Get_Scalar
+from .freematch_utils import entropy_loss, consistency_loss, Get_Scalar
 from train_utils import ce_loss, wd_loss, EMA, Bn_Controller
 
 from sklearn.metrics import *
 from copy import deepcopy
 
 
-class FlexMatch:
-    def __init__(self, net_builder, num_classes, ema_m, T, p_cutoff, lambda_u, \
+class FreeMatch:
+    def __init__(self, net_builder, num_classes, ema_m, lambda_u, lambda_e, \
                  hard_label=True, t_fn=None, p_fn=None, it=0, num_eval_iter=1000, tb_log=None, logger=None):
         """
-        class Flexmatch contains setter of data_loader, optimizer, and model update methods.
+        class Freematch contains setter of data_loader, optimizer, and model update methods.
         Args:
             net_builder: backbone network class (see net_builder in utils.py)
-            num_classes: # of label classes 
+            num_classes: # of label classes
             ema_m: momentum of exponential moving average for eval_model
-            T: Temperature scaling parameter for output sharpening (only when hard_label = False)
-            p_cutoff: confidence cutoff parameters for loss masking
             lambda_u: ratio of unsupervised loss to supervised loss
             hard_label: If True, consistency regularization use a hard pseudo label.
             it: initial iteration count
@@ -38,7 +37,7 @@ class FlexMatch:
             logger: logger (see utils.py)
         """
 
-        super(FlexMatch, self).__init__()
+        super(FreeMatch, self).__init__()
 
         # momentum update param
         self.loader = {}
@@ -53,9 +52,8 @@ class FlexMatch:
         self.ema_model = None
 
         self.num_eval_iter = num_eval_iter
-        self.t_fn = Get_Scalar(T)  # temperature params function
-        self.p_fn = Get_Scalar(p_cutoff)  # confidence cutoff function
         self.lambda_u = lambda_u
+        self.lambda_e = lambda_e
         self.tb_log = tb_log
         self.use_hard_label = hard_label
 
@@ -63,6 +61,9 @@ class FlexMatch:
         self.scheduler = None
 
         self.it = 0
+        self.lst = [[] for i in range(10)]
+        self.abs_lst = [[] for i in range(10)]
+        self.clsacc = [[] for i in range(10)]
         self.logger = logger
         self.print_fn = print if logger is None else logger.info
 
@@ -78,6 +79,100 @@ class FlexMatch:
     def set_optimizer(self, optimizer, scheduler=None):
         self.optimizer = optimizer
         self.scheduler = scheduler
+    
+    def warmup(self, args, logger=None):
+        ngpus_per_node = torch.cuda.device_count()
+
+        self.model.train()
+
+        # for gpu profiling
+        start_batch = torch.cuda.Event(enable_timing=True)
+        end_batch = torch.cuda.Event(enable_timing=True)
+        start_run = torch.cuda.Event(enable_timing=True)
+        end_run = torch.cuda.Event(enable_timing=True)
+
+        warmup_it = 0
+        start_batch.record()
+
+        scaler = GradScaler()
+        amp_cm = autocast if args.amp else contextlib.nullcontext
+
+        for _, x_lb, y_lb in self.loader_dict['train_lb']:
+
+            # prevent the training iterations exceed args.num_train_iter
+            if warmup_it > 2048:
+                break
+
+            end_batch.record()
+            torch.cuda.synchronize()
+            start_run.record()
+
+            x_lb = x_lb.cuda(args.gpu)
+            y_lb = y_lb.cuda(args.gpu)
+
+            num_lb = x_lb.shape[0]
+
+            # inference and calculate sup/unsup losses
+            with amp_cm():
+
+                logits_x_lb = self.model(x_lb)
+                sup_loss = ce_loss(logits_x_lb, y_lb, use_hard_labels=True, reduction='mean')
+
+                total_loss = sup_loss
+
+            # parameter updates
+            if args.amp:
+                scaler.scale(total_loss).backward()
+                if (args.clip > 0):
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), args.clip)
+                scaler.step(self.optimizer)
+                scaler.update()
+            else:
+                total_loss.backward()
+                if (args.clip > 0):
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), args.clip)
+                self.optimizer.step()
+
+            self.model.zero_grad()
+
+            end_run.record()
+            torch.cuda.synchronize()
+
+            # tensorboard_dict update
+            tb_dict = {}
+            tb_dict['train/sup_loss'] = sup_loss.item()
+            tb_dict['lr'] = self.optimizer.param_groups[0]['lr']
+            tb_dict['train/prefecth_time'] = start_batch.elapsed_time(end_batch) / 1000.
+            tb_dict['train/run_time'] = start_run.elapsed_time(end_run) / 1000.
+
+            if warmup_it % 1000 == 0:
+                self.print_fn(f"warmup {warmup_it} iteration, {tb_dict}")
+
+            del tb_dict
+            start_batch.record()
+            warmup_it += 1
+
+        # compute p_model, time_p, 
+        self.model.eval()
+        probs = []
+        with torch.no_grad():
+            for _, x, y in self.loader_dict['eval']:
+
+                x = x.cuda(args.gpu)
+                y = y.cuda(args.gpu)
+
+                # inference and calculate sup/unsup losses
+                with amp_cm():
+                    logits = self.model(x)
+                probs.append(logits.softmax(dim=-1).cpu())
+        
+        probs = torch.cat(probs)
+        max_probs, max_idx = torch.max(probs, dim=-1)
+
+        self.time_p = max_probs.mean()
+        self.p_model = torch.mean(probs, dim=0)
+        label_hist = torch.bincount(max_idx, minlength=probs.shape[1]).to(probs.dtype) 
+        self.label_hist = label_hist / label_hist.sum()
 
     def train(self, args, logger=None):
 
@@ -89,21 +184,6 @@ class FlexMatch:
         self.ema.register()
         if args.resume == True:
             self.ema.load(self.ema_model)
-
-        # p(y) based on the labeled examples seen during training
-        dist_file_name = r"./data_statistics/" + args.dataset + '_' + str(args.num_labels) + '.json'
-        if args.dataset.upper() == 'IMAGENET':
-            p_target = None
-        elif args.dataset.lower() == "dreyeve":
-            p_target = None
-        else:
-            with open(dist_file_name, 'r') as f:
-                p_target = json.loads(f.read())
-                p_target = torch.tensor(p_target['distribution'])
-                p_target = p_target.cuda(args.gpu)
-            # print('p_target:', p_target)
-
-        p_model = None
 
         # for gpu profiling
         start_batch = torch.cuda.Event(enable_timing=True)
@@ -121,15 +201,14 @@ class FlexMatch:
         if args.resume == True:
             eval_dict = self.evaluate(args=args)
             print(eval_dict)
-    
-        selected_label = torch.ones((len(self.ulb_dset),), dtype=torch.long, ) * -1
-        selected_label = selected_label.cuda(args.gpu)
 
-        classwise_acc = torch.zeros((args.num_classes,)).cuda(args.gpu)
+        p_model = (torch.ones(args.num_classes) / args.num_classes).cuda()
+        label_hist = (torch.ones(args.num_classes) / args.num_classes).cuda() 
+        time_p = p_model.mean()
 
         for (_, x_lb, y_lb), (x_ulb_idx, x_ulb_w, x_ulb_s) in zip(self.loader_dict['train_lb'],
                                                                   self.loader_dict['train_ulb']):
-            
+
             # prevent the training iterations exceed args.num_train_iter
             if self.it > args.num_train_iter:
                 break
@@ -140,23 +219,11 @@ class FlexMatch:
 
             num_lb = x_lb.shape[0]
             num_ulb = x_ulb_w.shape[0]
-            assert (num_ulb == x_ulb_s.shape[0])
+            assert num_ulb == x_ulb_s.shape[0]
 
             x_lb, x_ulb_w, x_ulb_s = x_lb.cuda(args.gpu), x_ulb_w.cuda(args.gpu), x_ulb_s.cuda(args.gpu)
-            x_ulb_idx = x_ulb_idx.cuda(args.gpu)
             y_lb = y_lb.cuda(args.gpu)
 
-            pseudo_counter = Counter(selected_label.tolist())
-            if max(pseudo_counter.values()) < len(self.ulb_dset):  # not all(5w) -1
-                if args.thresh_warmup:
-                    for i in range(args.num_classes):
-                        classwise_acc[i] = pseudo_counter[i] / max(pseudo_counter.values())
-                else:
-                    wo_negative_one = deepcopy(pseudo_counter)
-                    if -1 in wo_negative_one.keys():
-                        wo_negative_one.pop(-1)
-                    for i in range(args.num_classes):
-                        classwise_acc[i] = pseudo_counter[i] / max(wo_negative_one.values())
             inputs = torch.cat((x_lb, x_ulb_w, x_ulb_s))
 
             # inference and calculate sup/unsup losses
@@ -167,27 +234,20 @@ class FlexMatch:
                 sup_loss = ce_loss(logits_x_lb, y_lb, reduction='mean')
 
                 # hyper-params for update
-                T = self.t_fn(self.it)
-                p_cutoff = self.p_fn(self.it)
-                unsup_loss, mask, select, pseudo_lb, p_model = consistency_loss(logits_x_ulb_s,
-                                                                                logits_x_ulb_w,
-                                                                                classwise_acc,
-                                                                                p_target,
-                                                                                p_model,
-                                                                                'ce', T, p_cutoff,
-                                                                                use_hard_labels=args.hard_label,
-                                                                                use_DA=args.use_DA)
+                time_p, p_model, label_hist = self.cal_time_p_and_p_model(logits_x_ulb_w, time_p, p_model, label_hist)
+                unsup_loss, mask = consistency_loss(args.dataset, logits_x_ulb_s,logits_x_ulb_w,
+                                                    time_p,p_model,
+                                                    'ce', use_hard_labels=args.hard_label)
+                
+                ent_loss, ps_label_hist = entropy_loss(mask, logits_x_ulb_s, logits_x_ulb_w, p_model, label_hist)
 
-                if x_ulb_idx[select == 1].nelement() != 0:
-                    selected_label[x_ulb_idx[select == 1]] = pseudo_lb[select == 1]
 
-                total_loss = sup_loss + self.lambda_u * unsup_loss
+                total_loss = sup_loss + self.lambda_u * unsup_loss + self.lambda_e * ent_loss
 
             # parameter updates
             if args.amp:
                 scaler.scale(total_loss).backward()
                 if (args.clip > 0):
-                    scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), args.clip)
                 scaler.step(self.optimizer)
                 scaler.update()
@@ -206,10 +266,15 @@ class FlexMatch:
 
             # tensorboard_dict update
             tb_dict = {}
-            tb_dict['train/sup_loss'] = sup_loss.detach()
-            tb_dict['train/unsup_loss'] = unsup_loss.detach()
-            tb_dict['train/total_loss'] = total_loss.detach()
-            tb_dict['train/mask_ratio'] = 1.0 - mask.detach()
+            tb_dict['train/sup_loss'] = sup_loss.item()
+            tb_dict['train/unsup_loss'] = unsup_loss.item()
+            tb_dict['train/ent_loss'] = ent_loss.item()
+            tb_dict['train/total_loss'] = total_loss.item()
+            tb_dict['train/time_p'] = time_p.item()
+            tb_dict['train/mask_ratio'] = 1.0 - mask.float().mean().item()
+            tb_dict['train/p_model'] = p_model.mean().item()
+            tb_dict['train/label_hist'] = label_hist.mean().item()
+            tb_dict['train/ps_label_hist'] = ps_label_hist.mean().item()
             tb_dict['lr'] = self.optimizer.param_groups[0]['lr']
             tb_dict['train/prefecth_time'] = start_batch.elapsed_time(end_batch) / 1000.
             tb_dict['train/run_time'] = start_run.elapsed_time(end_run) / 1000.
@@ -220,14 +285,16 @@ class FlexMatch:
                 if not args.multiprocessing_distributed or \
                         (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0):
                     self.save_model('latest_model.pth', save_path)
-
             if self.it % self.num_eval_iter == 0:
                 eval_dict = self.evaluate(args=args)
                 tb_dict.update(eval_dict)
+
                 save_path = os.path.join(args.save_dir, args.save_name)
+
                 if tb_dict['eval/top-1-acc'] > best_eval_acc:
                     best_eval_acc = tb_dict['eval/top-1-acc']
                     best_it = self.it
+
                 self.print_fn(
                     f"{self.it} iteration, USE_EMA: {self.ema_m != 0}, {tb_dict}, BEST_EVAL_ACC: {best_eval_acc}, at {best_it} iters")
 
@@ -250,6 +317,27 @@ class FlexMatch:
         return eval_dict
 
     @torch.no_grad()
+    def cal_time_p_and_p_model(self,logits_x_ulb_w, time_p, p_model, label_hist):
+        prob_w = torch.softmax(logits_x_ulb_w, dim=1) 
+        max_probs, max_idx = torch.max(prob_w, dim=-1)
+        if time_p is None:
+            time_p = max_probs.mean()
+        else:
+            time_p = time_p * 0.999 +  max_probs.mean() * 0.001
+        if p_model is None:
+            p_model = torch.mean(prob_w, dim=0)
+        else:
+            p_model = p_model * 0.999 + torch.mean(prob_w, dim=0) * 0.001
+        if label_hist is None:
+            label_hist = torch.bincount(max_idx, minlength=p_model.shape[0]).to(p_model.dtype) 
+            label_hist = label_hist / label_hist.sum()
+        else:
+            hist = torch.bincount(max_idx, minlength=p_model.shape[0]).to(p_model.dtype) 
+            label_hist = label_hist * 0.999 + (hist / hist.sum()) * 0.001
+        return time_p,p_model,label_hist
+
+
+    @torch.no_grad()
     def evaluate(self, eval_loader=None, args=None):
         self.model.eval()
         self.ema.apply_shadow()
@@ -266,29 +354,19 @@ class FlexMatch:
             total_num += num_batch
             logits = self.model(x)
             loss = F.cross_entropy(logits, y, reduction='mean')
-            # print("\nlogits\n", logits)
-            # print("\ntarget\n", y)
-            # print("\nloss\n", loss)
             y_true.extend(y.cpu().tolist())
             y_pred.extend(torch.max(logits, dim=-1)[1].cpu().tolist())
             y_logits.extend(torch.softmax(logits, dim=-1).cpu().tolist())
             total_loss += loss.detach() * num_batch
         top1 = accuracy_score(y_true, y_pred)
-
-        if args.dataset.lower() == "dreyeve":
-            top5 = -1
-            AUC = -1
-            recall = -1
-            precision = -1
-        else:
-            top5 = top_k_accuracy_score(y_true, y_logits, k=5)
-            AUC = roc_auc_score(y_true, y_logits, multi_class='ovo')
-            recall = recall_score(y_true, y_pred, average='macro')
-            precision = precision_score(y_true, y_pred, average='macro')
+        top5 = top_k_accuracy_score(y_true, y_logits, k=5)
+        precision = precision_score(y_true, y_pred, average='macro')
+        recall = recall_score(y_true, y_pred, average='macro')
         F1 = f1_score(y_true, y_pred, average='macro')
+        AUC = roc_auc_score(y_true, y_logits, multi_class='ovo')
 
         cf_mat = confusion_matrix(y_true, y_pred, normalize='true')
-        # self.print_fn('confusion matrix:\n' + np.array_str(cf_mat))
+        self.print_fn('confusion matrix:\n' + np.array_str(cf_mat))
         self.ema.restore()
         self.model.train()
         return {'eval/loss': total_loss / total_num, 'eval/top-1-acc': top1, 'eval/top-5-acc': top5,
@@ -306,7 +384,7 @@ class FlexMatch:
         torch.save({'model': self.model.state_dict(),
                     'optimizer': self.optimizer.state_dict(),
                     'scheduler': self.scheduler.state_dict(),
-                    'it': self.it + 1,
+                    'it': self.it,
                     'ema_model': ema_model},
                    save_filename)
 

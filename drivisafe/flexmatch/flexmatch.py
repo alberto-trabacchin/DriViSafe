@@ -12,12 +12,16 @@ import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.multiprocessing as mp
+from pathlib import Path
+from torchvision.transforms import transforms
+from torchvision.models import resnet50
 
 from utils import net_builder, get_logger, count_parameters, over_write_args_from_file
 from train_utils import TBLog, get_optimizer, get_cosine_schedule_with_warmup
 from models.flexmatch.flexmatch import FlexMatch
 from datasets.ssl_dataset import SSL_Dataset, ImageNetLoader, DreyeveLoader
 from datasets.data_utils import get_data_loader
+from data_setup import make_datasets, make_dataloaders
 
 
 def main(args):
@@ -108,6 +112,13 @@ def main_worker(gpu, ngpus_per_node, args):
     args.bn_momentum = 1.0 - 0.999
     if 'imagenet' in args.dataset.lower():
         _net_builder = net_builder('ResNet50', False, None, is_remix=False)
+
+    elif 'dreyeve' in args.dataset.lower():
+        print("Using Dreyeve dataset with ResNet50")
+        _net_builder = net_builder('ResNet50', False, None, is_remix=False)
+        # _net_builder = resnet50()
+        # _net_builder.fc = nn.Linear(2048, 2)
+
     else:
         _net_builder = net_builder(args.net,
                                    args.net_from_name,
@@ -187,6 +198,7 @@ def main_worker(gpu, ngpus_per_node, args):
  
     # Construct Dataset & DataLoader
     if args.dataset == 'cifar10':
+        print("Using CIFAR10 dataset")
         if args.num_labels == 10:
             fixmatch_index = [
                 [7408, 8148, 9850, 10361, 33949, 36506, 37018, 45044, 46443, 47447], 
@@ -216,45 +228,78 @@ def main_worker(gpu, ngpus_per_node, args):
         ulb_dset = image_loader.get_ulb_train_data()
         eval_dset = image_loader.get_lb_test_data()
 
+    # Temporary implementation
     elif args.dataset.lower() == "dreyeve":
-        image_loader = DreyeveLoader(root_path=args.data_dir, num_labels=args.num_labels,
-                                      num_class=args.num_classes)
-        lb_dset = image_loader.get_lb_train_data()
-        ulb_dset = image_loader.get_ulb_train_data()
-        eval_dset = image_loader.get_lb_test_data()
+        labels_to_idx = {
+            "Safe": 0,
+            "Dangerous": 1
+        }
+        train_lb_dset, train_ul_dset, test_dset, val_dset = make_datasets(
+            root_path = Path("./data"),
+            frames_path = Path("./data/dreyeve"),
+            annot_path = Path("./data/data_annotations.json"),
+            train_lab_size = args.num_lb_train,
+            test_size = args.num_test,
+            val_size = args.num_val,
+            transform = transforms.Compose([transforms.ToTensor()]),
+            labels_to_idx = labels_to_idx,
+            shuffle = True,
+            seed = 42
+        )
     
     else:
         sys.exit("Error selecting the dataset.")
 
     if args.rank == 0 and args.distributed:
         torch.distributed.barrier()
- 
-    loader_dict = {}
-    dset_dict = {'train_lb': lb_dset, 'train_ulb': ulb_dset, 'eval': eval_dset}
+    
+    # Dreyeve Dataloader (not considering validation set for now)
+    if args.dataset.lower() == "dreyeve":
+        train_lab_dl, train_unlab_dl, test_dl, val_dl = make_dataloaders(
+            lab_train_dataset = train_lb_dset,
+            unlab_train_dataset = train_ul_dset,
+            test_dataset = test_dset,
+            val_dataset = val_dset,
+            batch_size = args.batch_size,
+            shuffle = True,
+            num_workers = args.num_workers
+        )
+        loader_dict = {
+            "train_lb": train_lab_dl,
+            "train_ulb": train_unlab_dl,
+            "eval": test_dl
+        }
+        model.set_dset(train_ul_dset)
+        model.set_data_loader(loader_dict)
 
-    loader_dict['train_lb'] = get_data_loader(dset_dict['train_lb'],
-                                              args.batch_size,
-                                              data_sampler=args.train_sampler,
-                                              num_iters=args.num_train_iter,
-                                              num_workers=args.num_workers,
-                                              distributed=args.distributed)
+    else:
+        loader_dict = {}
+        dset_dict = {'train_lb': lb_dset, 'train_ulb': ulb_dset, 'eval': eval_dset}
 
-    loader_dict['train_ulb'] = get_data_loader(dset_dict['train_ulb'],
-                                               args.batch_size * args.uratio,
-                                               data_sampler=args.train_sampler,
-                                               num_iters=args.num_train_iter,
-                                               num_workers=4 * args.num_workers,
-                                               distributed=args.distributed)
+        loader_dict['train_lb'] = get_data_loader(dset_dict['train_lb'],
+                                                args.batch_size,
+                                                data_sampler=args.train_sampler,
+                                                num_iters=args.num_train_iter,
+                                                num_workers=args.num_workers,
+                                                distributed=args.distributed)
 
-    loader_dict['eval'] = get_data_loader(dset_dict['eval'],
-                                          args.eval_batch_size,
-                                          num_workers=args.num_workers,
-                                          drop_last=False)
+        loader_dict['train_ulb'] = get_data_loader(dset_dict['train_ulb'],
+                                                args.batch_size * args.uratio,
+                                                data_sampler=args.train_sampler,
+                                                num_iters=args.num_train_iter,
+                                                num_workers=4 * args.num_workers,
+                                                distributed=args.distributed)
 
-    ## set DataLoader and ulb_dset on FlexMatch
-    model.set_data_loader(loader_dict)
+        loader_dict['eval'] = get_data_loader(dset_dict['eval'],
+                                            args.eval_batch_size,
+                                            num_workers=args.num_workers,
+                                            drop_last=False)
 
-    model.set_dset(ulb_dset)
+        ## set DataLoader and ulb_dset on FlexMatch
+        model.set_data_loader(loader_dict)
+
+        model.set_dset(ulb_dset)
+
 
     # If args.resume, load checkpoints from args.load_path
     if args.resume:
@@ -264,6 +309,7 @@ def main_worker(gpu, ngpus_per_node, args):
     trainer = model.train
     for epoch in range(args.epoch):
         trainer(args, logger=logger)
+        
 
     if not args.multiprocessing_distributed or \
             (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0):
@@ -302,10 +348,15 @@ if __name__ == "__main__":
     Training Configuration of flexmatch
     '''
 
+    parser.add_argument("--num_lb_train", type = int, required=True, help = "Size of the labeled training set")
+    parser.add_argument("--num_val", type = int, required=True, help = "Size of the validation set")
+    parser.add_argument("--num_test", type = int, required=True, help = "Size of the testing set")
+    
+
     parser.add_argument('--epoch', type=int, default=1)
     parser.add_argument('--num_train_iter', type=int, default=2 ** 20,
                         help='total number of training iterations')
-    parser.add_argument('--num_eval_iter', type=int, default=5000,
+    parser.add_argument('--num_eval_iter', type=int, default=100,
                         help='evaluation frequency')
     parser.add_argument('-nl', '--num_labels', type=int, default=40)
     parser.add_argument('-bsz', '--batch_size', type=int, default=64)
@@ -347,8 +398,8 @@ if __name__ == "__main__":
 
     parser.add_argument('--data_dir', type=str, default='./data')
     parser.add_argument('-ds', '--dataset', type=str, default='cifar10')
-    parser.add_argument('--train_sampler', type=str, default='RandomSampler')
-    parser.add_argument('-nc', '--num_classes', type=int, default=10)
+    parser.add_argument('--train_sampler', type=str, default=None)
+    parser.add_argument('-nc', '--num_classes', type=int, required = True)
     parser.add_argument('--num_workers', type=int, default=1)
 
     '''
