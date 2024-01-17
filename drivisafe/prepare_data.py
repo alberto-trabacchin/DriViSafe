@@ -84,7 +84,6 @@ if __name__ == "__main__":
     # Get all video paths
     video_paths = [(f / "video_garmin.avi") for f in dataset_path.iterdir() if f.is_dir()]
     create_labelstudio_json(save_path = Path(args.dataset_path))
-    exit()
 
     # Convert videos to frames (parallelized)
     p = mp.Pool(processes = args.n_workers)
