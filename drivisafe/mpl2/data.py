@@ -140,35 +140,65 @@ def get_dreyeve(args):
         transforms.ToTensor()
     ])
 
-    base_dataset = DreyeveSSL(args.data_path, indexs = range(30000))
-    train_labeled_idxs, train_unlabeled_idxs, finetune_idxs = x_u_split(args, base_dataset.targets)
-    print("train_labeled_idxs: ", train_labeled_idxs)
+    if args.subset_size is not None:
+        subset_size = range(args.subset_size)
+    else:
+        subset_size = None
+    base_dataset = DreyeveSSL(args.data_path, indexs = subset_size)
+    train_lb_idxs, train_ul_idxs, val_idxs, \
+    test_idxs, finetune_idxs = x_u_split_dreyeve(args, base_dataset.targets)
+    train_labeled_dataset = DreyeveSSL(root = args.data_path,
+                                       indexs = train_lb_idxs,
+                                       transform = transform_labeled)
+    train_unlabeled_dataset = DreyeveSSL(root = args.data_path,
+                                         indexs = train_ul_idxs,
+                                         transform = TransformDreyeveMPL(args, mean=normal_mean, std=normal_std))
+    val_dataset = DreyeveSSL(root = args.data_path,
+                             indexs = val_idxs,
+                             transform = transform_val)
+    test_dataset = DreyeveSSL(root = args.data_path,
+                              indexs = test_idxs,
+                              transform = transform_val)
+    finetune_dataset = DreyeveSSL(root = args.data_path,
+                                  indexs = finetune_idxs,
+                                  transform = transform_finetune)
+
+    # print("train_lb_idxs:\t", train_lb_idxs[0], "\t", train_lb_idxs.shape, "\t\t", base_dataset.full_img_names[train_lb_idxs[0]])
+    # print("train_ul_idxs:\t", train_ul_idxs[0], "\t", train_ul_idxs.shape, "\t", base_dataset.full_img_names[train_ul_idxs[0]])
+    # print("val_idxs:\t", val_idxs[0], "\t", val_idxs.shape, "\t\t", base_dataset.full_img_names[val_idxs[0]])
+    # print("test_idxs:\t", test_idxs[0], "\t", test_idxs.shape, "\t\t", base_dataset.full_img_names[test_idxs[0]])
+
+    return train_labeled_dataset, train_unlabeled_dataset, test_dataset, finetune_dataset
     
 
 
 def x_u_split_dreyeve(args, targets):
-    train_lb_per_class = args.num_lb_train // args.num_classes
-    val_per_class = args.num_val // args.num_classes
-    test_per_class = args.num_test // args.num_classes
-    labels = np.array(labels)
+    train_lb, train_ul, val, test = [], [], [], []
+    n_classes = args.num_classes
+    train_lb_size = args.num_train_lb
+    val_size = args.num_val
+    test_size = args.num_test
 
-    train_lb_idxs = []
-    train_ulb_idxs = []
-    val_idxs = []
-    test_idxs = []
-    # TO FIX
-        # for idx, label in enumerate(labels):
-        #     if label in [0, 1]:
-        #         if len(a) < args.num_labeled // args.num_classes:
-        #             a.append(idx)
-        #         else:
-        #             b.append(idx)
-        #     elif label == -1:
-        #         if len(c) < args.num_labeled // args.num_classes:
-        #             c.append(idx)
-        #         else:
-        #             d.append(idx)
+    targets = np.array(targets)
+    lb_idxs = np.where(targets != -1)[0]
+    ul_idxs = np.where(targets == -1)[0]
+    lb_size_sec = train_lb_size // n_classes
+    test_size_sec = test_size // n_classes + lb_size_sec
 
+    val, train_ul = np.split(ul_idxs, [val_size])
+    train_ul = list(train_ul)
+    for i in range(n_classes):
+        lb_idxs = np.where(targets == i)[0]
+        train_lb_class, test_class, _ = np.split(lb_idxs, [lb_size_sec, test_size_sec])
+        train_lb.extend(train_lb_class)
+        test.extend(test_class)
+    train_ul.extend(train_lb)
+    train_ul = np.array(train_ul)
+    train_lb = np.array(train_lb)
+    test = np.array(test)
+
+    return train_lb, train_ul, val, test, train_lb
+    
 
 def x_u_split(args, labels):
     label_per_class = args.num_labeled // args.num_classes
@@ -221,6 +251,22 @@ def x_u_split_test(args, labels):
     np.random.shuffle(labeled_idx)
     np.random.shuffle(unlabeled_idx)
     return labeled_idx, unlabeled_idx
+
+
+class TransformDreyeveMPL(object):
+    def __init__(self, args, mean, std):
+        
+        self.aug = transforms.Compose([
+            transforms.RandomHorizontalFlip()
+        ])
+        
+        self.base = transforms.Compose([
+            transforms.ToTensor()
+        ])
+
+    def __call__(self, x):
+        aug = self.aug(x)
+        return self.base(x), self.base(aug)
 
 
 class TransformMPL(object):
@@ -337,8 +383,10 @@ class DreyeveSSL(Dataset):
         annots = json.load(self.annot_path.open(mode = "r"))
         self.labels_to_idx = {"Safe": 0, "Dangerous": 1}
         self.idx_to_labels = {v: k for k, v in self.labels_to_idx.items()}
-        annot_targets = [self.labels_to_idx[d["choice"]] for d in annots]
-        target_fnames = [d["image"][0].split("/")[-1] for d in annots]
+        # annot_targets = [self.labels_to_idx[d["choice"]] for d in annots] <-- To fix on labelstudio (empty labels)
+        annot_targets = [self.labels_to_idx[d["choice"]] for d in annots if "choice" in d]
+        # target_fnames = [d["image"][0].split("/")[-1] for d in annots] <-- To fix on labelstudio (empty labels)
+        target_fnames = [d["image"][0].split("/")[-1] for d in annots if "choice" in d]
         for annot_id, annot_fname in enumerate(target_fnames):
             i = img_names.index(annot_fname)
             target = annot_targets[annot_id]
@@ -358,6 +406,7 @@ class DreyeveSSL(Dataset):
 
     def __getitem__(self, index: int) -> Tuple[str, int]:
         image = self.data[index]
+        image = Image.fromarray(image)
         target = self.targets[index]
 
         if self.transform is not None:
@@ -385,15 +434,19 @@ class DreyeveSSL(Dataset):
 
 
 DATASET_GETTERS = {'cifar10': get_cifar10,
-                   'cifar100': get_cifar100}
+                   'cifar100': get_cifar100,
+                   'dreyeve': get_dreyeve}
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='MPL Implementation')
     parser.add_argument("--data_path", type=str, default="./data")
-    parser.add_argument("--num_labeled", type=int, default=2)
     parser.add_argument("--num_classes", type=int, default=2)
+    parser.add_argument("--num_train_lb", type=int, default=2)
+    parser.add_argument("--num_val", type=int, default=2)
+    parser.add_argument("--num_test", type=int, default=2)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--subset_size", type=int, default=None)
 
     args = parser.parse_args()
 

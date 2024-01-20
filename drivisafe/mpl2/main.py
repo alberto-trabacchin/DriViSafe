@@ -30,7 +30,7 @@ parser.add_argument('--name', type=str, required=True, help='experiment name')
 parser.add_argument('--data-path', default='./data', type=str, help='data path')
 parser.add_argument('--save-path', default='./checkpoint', type=str, help='save path')
 parser.add_argument('--dataset', default='cifar10', type=str,
-                    choices=['cifar10', 'cifar100'], help='dataset name')
+                    choices=['cifar10', 'cifar100', 'dreyeve'], help='dataset name')
 parser.add_argument('--num-labeled', type=int, default=4000, help='number of labeled data')
 parser.add_argument("--expand-labels", action="store_true", help="expand labels to fit eval steps")
 parser.add_argument('--total-steps', default=300000, type=int, help='number of total steps to run')
@@ -74,6 +74,14 @@ parser.add_argument('--world-size', default=-1, type=int,
                     help='number of nodes for distributed training')
 parser.add_argument("--local_rank", type=int, default=-1,
                     help="For distributed training: local_rank")
+
+
+parser.add_argument("--data_path", type=str, default="./data")
+parser.add_argument("--num_train_lb", type=int, default=2)
+parser.add_argument("--num_val", type=int, default=2)
+parser.add_argument("--num_test", type=int, default=2)
+parser.add_argument("--subset_size", type=int, default=None)
+
 
 
 def set_seed(args):
@@ -160,28 +168,33 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
         try:
             # error occurs ↓
             # (images_uw, images_us), _ = unlabeled_iter.next()
-            (images_uw, images_us), _ = next(unlabeled_iter)
+            (images_uw, images_us), _ = next(unlabeled_iter) #<-- old access to dataset
+            # images_ul, _ = next(unlabeled_iter)
         except:
             if args.world_size > 1:
                 unlabeled_epoch += 1
                 unlabeled_loader.sampler.set_epoch(unlabeled_epoch)
             unlabeled_iter = iter(unlabeled_loader)
             # error occurs ↓
-            # (images_uw, images_us), _ = unlabeled_iter.next()
-            (images_uw, images_us), _ = next(unlabeled_iter)
+            (images_uw, images_us), _ = unlabeled_iter.next()
+            (images_uw, images_us), _ = next(unlabeled_iter) #<-- old access to dataset
+            # images_ul, _ = next(unlabeled_iter)
 
         data_time.update(time.time() - end)
 
         images_l = images_l.to(args.device)
-        images_uw = images_uw.to(args.device)
+        images_uw = images_uw.to(args.device) #<-- old loads to gpu
         images_us = images_us.to(args.device)
+        # images_ul = images_ul.to(args.device)
         targets = targets.to(args.device)
         with amp.autocast(enabled=args.amp):
             batch_size = images_l.shape[0]
-            t_images = torch.cat((images_l, images_uw, images_us))
+            t_images = torch.cat((images_l, images_uw, images_us)) #<-- old concat
+            # t_images = torch.cat((images_l, images_ul)) # <-- teacher images are labeled + unlabeled (without preprocessing)
             t_logits = teacher_model(t_images)
             t_logits_l = t_logits[:batch_size]
-            t_logits_uw, t_logits_us = t_logits[batch_size:].chunk(2)
+            t_logits_uw, t_logits_us = t_logits[batch_size:].chunk(2) #<-- old t_logits
+            # t_logits_ul = t_logits[batch_size:]
             del t_logits
 
             t_loss_l = criterion(t_logits_l, targets)
@@ -196,6 +209,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
             t_loss_uda = t_loss_l + weight_u * t_loss_u
 
             s_images = torch.cat((images_l, images_us))
+            # s_images = torch.cat((images_l, images_ul)) # <-- student images are labeled + unlabeled (without preprocessing)
             s_logits = student_model(s_images)
             s_logits_l = s_logits[:batch_size]
             s_logits_us = s_logits[batch_size:]
@@ -469,7 +483,7 @@ def main():
         args.gpu = 0
         args.world_size = 1
 
-    args.device = torch.device('cuda', args.gpu)
+    args.device = torch.device('cuda', args.gpu) if torch.cuda.is_available() else torch.device('cpu')
 
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
@@ -523,6 +537,8 @@ def main():
         depth, widen_factor = 28, 2
     elif args.dataset == 'cifar100':
         depth, widen_factor = 28, 8
+    elif args.dataset == 'dreyeve':
+        depth, widen_factor = 28, 2
 
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()
