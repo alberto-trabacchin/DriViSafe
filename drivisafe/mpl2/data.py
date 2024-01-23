@@ -174,9 +174,6 @@ def get_dreyeve(args):
     print("train_ul len:\t", len(train_ul_idxs))
     print("val len:\t", len(val_idxs))
     print("test len:\t", len(test_idxs))
-    print(len([t for t in test_dataset.targets if t == 0]))
-    print(len([t for t in test_dataset.targets if t == 1]))
-    exit()
 
     return train_labeled_dataset, train_unlabeled_dataset, test_dataset, finetune_dataset
     
