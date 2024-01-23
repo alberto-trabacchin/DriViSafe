@@ -17,7 +17,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 import wandb
 from tqdm import tqdm
-from vit_pytorch import ViT
+from vit_pytorch import ViT, SimpleViT
 
 from data import DATASET_GETTERS
 from models import WideResNet, ModelEMA
@@ -80,8 +80,9 @@ parser.add_argument("--local_rank", type=int, default=-1,
 parser.add_argument("--data_path", type=str, default="./data")
 parser.add_argument("--num_train_lb", type=int, default=2)
 parser.add_argument("--num_val", type=int, default=2)
-# parser.add_argument("--num_test", type=int, default=2) # <-- Old: now not choosing test size. Just taking all remaining labeled samples.
+parser.add_argument("--num_test", type=int, default=-1) # <-- Old: now not choosing test size. Just taking all remaining labeled samples.
 parser.add_argument("--subset_size", type=int, default=None)
+parser.add_argument("--model", type=str, default="wideresnet", choices=["wideresnet", "vit", "simplevit"])
 
 
 
@@ -504,10 +505,6 @@ def main():
 
     logger.info(dict(args._get_kwargs()))
 
-    if args.local_rank in [-1, 0]:
-        args.writer = SummaryWriter(f"results/{args.name}")
-        wandb.init(name=args.name, project='MPL-DriViSafe', config=args)
-
     if args.seed is not None:
         set_seed(args)
 
@@ -515,6 +512,13 @@ def main():
         torch.distributed.barrier()
 
     labeled_dataset, unlabeled_dataset, test_dataset, finetune_dataset = DATASET_GETTERS[args.dataset](args)
+
+    if args.local_rank in [-1, 0]:
+        args.writer = SummaryWriter(f"results/{args.name}")
+        lab_train_size = len(labeled_dataset)
+        unlab_train_size = len(unlabeled_dataset)
+        test_size = len(test_dataset)
+        wandb.init(name=f"{args.name}-{lab_train_size}LB-{unlab_train_size}UL-{test_size}TS", project='MPL-DriViSafe', config=args)
 
     if args.local_rank == 0:
         torch.distributed.barrier()
@@ -550,17 +554,61 @@ def main():
         torch.distributed.barrier()
 
     if args.dataset == 'dreyeve':
-        teacher_model = ViT(
-            image_size = 192,
-            patch_size = 32,
-            num_classes = 2,
-            dim = 1024,
-            depth = 6,
-            heads = 16,
-            mlp_dim = 2048,
-            dropout = 0.1,
-            emb_dropout = 0.1
-        )
+        if args.model == "vit":
+            teacher_model = ViT(
+                image_size = (108, 192),
+                patch_size = 6,
+                num_classes = 2,
+                dim = 1024,
+                depth = 6,
+                heads = 16,
+                mlp_dim = 2048,
+                dropout = 0.1,
+                emb_dropout = 0.1
+            )
+            student_model = ViT(
+                image_size = (108, 192),
+                patch_size = 6,
+                num_classes = 2,
+                dim = 1024,
+                depth = 6,
+                heads = 16,
+                mlp_dim = 2048,
+                dropout = 0.1,
+                emb_dropout = 0.1
+            )
+        elif args.model == "simplevit":
+            teacher_model = SimpleViT(
+                image_size = (108, 192),
+                patch_size = 6,
+                num_classes = 2,
+                dim = 1024, # <-- embedding dimension
+                depth = 2,
+                heads = 8,
+                mlp_dim = 2048
+            )
+            student_model = SimpleViT(
+                image_size = (108, 192),
+                patch_size = 6,
+                num_classes = 2,
+                dim = 1024, # <-- embedding dimension
+                depth = 2,
+                heads = 8,
+                mlp_dim = 2048
+            )
+        elif args.model == "wideresnet":
+            teacher_model = WideResNet(num_classes=args.num_classes,
+                                    depth=depth,
+                                    widen_factor=widen_factor,
+                                    dropout=0,
+                                    dense_dropout=args.teacher_dropout)
+            student_model = WideResNet(num_classes=args.num_classes,
+                                    depth=depth,
+                                    widen_factor=widen_factor,
+                                    dropout=0,
+                                    dense_dropout=args.student_dropout)
+        else:
+            raise NotImplementedError
 
     else:
         teacher_model = WideResNet(num_classes=args.num_classes,
