@@ -596,6 +596,7 @@ def main():
                 heads = 8,
                 mlp_dim = 2048
             )
+            wandb.watch(models = teacher_model, log = "all")
         elif args.model == "wideresnet":
             teacher_model = WideResNet(num_classes=args.num_classes,
                                     depth=depth,
