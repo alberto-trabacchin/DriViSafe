@@ -392,6 +392,31 @@ def evaluate(args, test_loader, model, criterion):
 
         test_iter.close()
         return losses.avg, top1.avg, top5.avg
+    
+
+def validate(args, val_loader, model, criterion): # <-- To continue...
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+    model.eval()
+    val_iter = tqdm(val_loader, disable=args.local_rank not in [-1, 0])
+    with torch.no_grad():
+        end = time.time()
+        for step, (images, targets) in enumerate(val_iter):
+            data_time.update(time.time() - end)
+            batch_size = images.shape[0]
+            images = images.to(torch.device("cpu"))
+            targets = targets.to(torch.device("cpu"))
+            with amp.autocast(enabled=args.amp):
+                logits = model(images)
+                prob = torch.softmax(logits, dim=-1)
+                classes = torch.argmax(prob, dim=-1)
+                class_names = val_loader.dataset.idx_to_labels(classes)
+                paths = val_loader.dataset.full_img_names
+    
+    for (path, c_name) in zip(paths, class_names):
+        print(f"{path} : {c_name}")
+
+                
 
 
 def finetune(args, finetune_dataset, test_loader, model, criterion):
@@ -582,18 +607,18 @@ def main():
                 image_size = (108, 192),
                 patch_size = 6,
                 num_classes = 2,
-                dim = 1024, # <-- embedding dimension
-                depth = 2,
-                heads = 8,
+                dim = 1024,
+                depth = 6,
+                heads = 16,
                 mlp_dim = 2048
             )
             student_model = SimpleViT(
                 image_size = (108, 192),
                 patch_size = 6,
                 num_classes = 2,
-                dim = 1024, # <-- embedding dimension
-                depth = 2,
-                heads = 8,
+                dim = 1024,
+                depth = 6,
+                heads = 16,
                 mlp_dim = 2048
             )
             wandb.watch(models = teacher_model, log = "all")
@@ -719,6 +744,12 @@ def main():
         del t_scaler, t_scheduler, t_optimizer, teacher_model, unlabeled_loader, labeled_loader
         del s_scaler, s_scheduler, s_optimizer
         evaluate(args, test_loader, student_model, criterion)
+        return
+    
+    if args.valid:
+        del t_scaler, t_scheduler, t_optimizer, teacher_model, unlabeled_loader, labeled_loader
+        del s_scaler, s_scheduler, s_optimizer
+        validate(args, val_loader, student_model, criterion)
         return
 
     teacher_model.zero_grad()
