@@ -145,8 +145,11 @@ def get_dreyeve(args):
     else:
         subset_size = None
     base_dataset = DreyeveSSL(args.data_path, indexs = subset_size)
+
     train_lb_idxs, train_ul_idxs, val_idxs, \
     test_idxs, finetune_idxs = x_u_split_dreyeve(args, base_dataset.targets)
+
+
     train_labeled_dataset = DreyeveSSL(root = args.data_path,
                                        indexs = train_lb_idxs,
                                        transform = transform_labeled)
@@ -167,6 +170,13 @@ def get_dreyeve(args):
     # print("train_ul_idxs:\t", train_ul_idxs[0], "\t", train_ul_idxs.shape, "\t", base_dataset.full_img_names[train_ul_idxs[0]])
     # print("val_idxs:\t", val_idxs[0], "\t", val_idxs.shape, "\t\t", base_dataset.full_img_names[val_idxs[0]])
     # print("test_idxs:\t", test_idxs[0], "\t", test_idxs.shape, "\t\t", base_dataset.full_img_names[test_idxs[0]])
+    print("train_lb len:\t", len(train_lb_idxs))
+    print("train_ul len:\t", len(train_ul_idxs))
+    print("val len:\t", len(val_idxs))
+    print("test len:\t", len(test_idxs))
+    print(len([t for t in test_dataset.targets if t == 0]))
+    print(len([t for t in test_dataset.targets if t == 1]))
+    exit()
 
     return train_labeled_dataset, train_unlabeled_dataset, test_dataset, finetune_dataset
     
@@ -189,7 +199,8 @@ def x_u_split_dreyeve(args, targets):
     train_ul = list(train_ul)
     for i in range(n_classes):
         lb_idxs = np.where(targets == i)[0]
-        train_lb_class, test_class, _ = np.split(lb_idxs, [lb_size_sec, test_size_sec])
+        # train_lb_class, test_class, _ = np.split(lb_idxs, [lb_size_sec, test_size_sec]) # <-- Old split (test does not take all remaining data)
+        train_lb_class, test_class = np.split(lb_idxs, [lb_size_sec]) # <-- New split (test takes all remaining data)
         train_lb.extend(train_lb_class)
         test.extend(test_class)
     train_ul.extend(train_lb)

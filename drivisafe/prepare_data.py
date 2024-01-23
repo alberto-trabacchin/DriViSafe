@@ -45,6 +45,13 @@ def worker(args) -> bool:
     return True
 
 
+def worker(args) -> bool:
+    video_path, save_path, resize, max_frames, sampling_step = args
+    video_id = video_path.parent.stem
+    os.system(f"ffmpeg -i {str(video_path)} -vf:scale=384:216 fps=10 ./data/dreyeve/{video_id}_%d.jpg")
+    return True
+
+
 def create_labelstudio_json(save_path: Path) -> None:
     """
     Generate a JSON file for Label Studio with paths to the images that need to be labeled.
@@ -59,7 +66,7 @@ def create_labelstudio_json(save_path: Path) -> None:
     frame_names = [f.name for f in (save_path / "dreyeve").iterdir() if f.is_file()]
     data = []
     for f in frame_names:
-        lab_studio_frame_path = "/data/local-files?d=Dr(eye)ve/dreyeve/" + str(f)
+        lab_studio_frame_path = "/data/local-files?d=Dreyeve/dreyeve/" + str(f)
         data.append({"image": [str(lab_studio_frame_path)]})
     loc_storage_path = str(save_path / "local-storage.json")
     with open(loc_storage_path, "w") as f:
@@ -84,6 +91,8 @@ if __name__ == "__main__":
     # Get all video paths
     video_paths = [(f / "video_garmin.avi") for f in dataset_path.iterdir() if f.is_dir()]
 
+    # for vp in video_paths:
+    #     os.system(f"ffmpeg -i {str(vp)} -vf:scale=384:216 fps=10 ./data/dreyeve/{vp.parent.stem}_%d.jpg")
     # Convert videos to frames (parallelized)
     p = mp.Pool(processes = args.n_workers)
     worker_args = [(
@@ -93,6 +102,7 @@ if __name__ == "__main__":
         args.max_frames,
         args.sampling_step
     ) for video_path in video_paths]
+    print(len(worker_args))
     results = p.map(worker, worker_args)
     p.close()
     p.join()

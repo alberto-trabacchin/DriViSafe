@@ -15,8 +15,9 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
-# import wandb
+import wandb
 from tqdm import tqdm
+from vit_pytorch import ViT
 
 from data import DATASET_GETTERS
 from models import WideResNet, ModelEMA
@@ -38,7 +39,7 @@ parser.add_argument('--eval-step', default=1000, type=int, help='number of eval 
 parser.add_argument('--start-step', default=0, type=int,
                     help='manual epoch number (useful on restarts)')
 parser.add_argument('--workers', default=4, type=int, help='number of workers')
-parser.add_argument('--num-classes', default=10, type=int, help='number of classes')
+parser.add_argument('--num-classes', default=2, type=int, help='number of classes')
 parser.add_argument('--resize', default=32, type=int, help='resize image')
 parser.add_argument('--batch-size', default=64, type=int, help='train batch size')
 parser.add_argument('--teacher-dropout', default=0, type=float, help='dropout on last dense layer')
@@ -79,7 +80,7 @@ parser.add_argument("--local_rank", type=int, default=-1,
 parser.add_argument("--data_path", type=str, default="./data")
 parser.add_argument("--num_train_lb", type=int, default=2)
 parser.add_argument("--num_val", type=int, default=2)
-parser.add_argument("--num_test", type=int, default=2)
+# parser.add_argument("--num_test", type=int, default=2) # <-- Old: now not choosing test size. Just taking all remaining labeled samples.
 parser.add_argument("--subset_size", type=int, default=None)
 
 
@@ -160,6 +161,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
             if args.world_size > 1:
                 labeled_epoch += 1
                 labeled_loader.sampler.set_epoch(labeled_epoch)
+            print("Pointing to first element of labeled_iter")
             labeled_iter = iter(labeled_loader)
             # error occurs ↓
             # images_l, targets = labeled_iter.next()
@@ -174,9 +176,10 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
             if args.world_size > 1:
                 unlabeled_epoch += 1
                 unlabeled_loader.sampler.set_epoch(unlabeled_epoch)
+            print("Pointing to first element of unlabeled_iter")
             unlabeled_iter = iter(unlabeled_loader)
             # error occurs ↓
-            (images_uw, images_us), _ = unlabeled_iter.next()
+            # (images_uw, images_us), _ = unlabeled_iter.next()
             (images_uw, images_us), _ = next(unlabeled_iter) #<-- old access to dataset
             # images_ul, _ = next(unlabeled_iter)
 
@@ -282,7 +285,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
         pbar.update()
         if args.local_rank in [-1, 0]:
             args.writer.add_scalar("lr", get_lr(s_optimizer), step)
-#             wandb.log({"lr": get_lr(s_optimizer)})
+            wandb.log({"lr": get_lr(s_optimizer)})
 
         args.num_eval = step // args.eval_step
         if (step + 1) % args.eval_step == 0:
@@ -294,28 +297,29 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
                 args.writer.add_scalar("train/4.t_unlabeled", t_losses_u.avg, args.num_eval)
                 args.writer.add_scalar("train/5.t_mpl", t_losses_mpl.avg, args.num_eval)
                 args.writer.add_scalar("train/6.mask", mean_mask.avg, args.num_eval)
-#                 wandb.log({"train/1.s_loss": s_losses.avg,
-#                            "train/2.t_loss": t_losses.avg,
-#                            "train/3.t_labeled": t_losses_l.avg,
-#                            "train/4.t_unlabeled": t_losses_u.avg,
-#                            "train/5.t_mpl": t_losses_mpl.avg,
-#                            "train/6.mask": mean_mask.avg})
+                wandb.log({"train/1.s_loss": s_losses.avg,
+                           "train/2.t_loss": t_losses.avg,
+                           "train/3.t_labeled": t_losses_l.avg,
+                           "train/4.t_unlabeled": t_losses_u.avg,
+                           "train/5.t_mpl": t_losses_mpl.avg,
+                           "train/6.mask": mean_mask.avg})
 
                 test_model = avg_student_model if avg_student_model is not None else student_model
                 test_loss, top1, top5 = evaluate(args, test_loader, test_model, criterion)
+                top1 = top1.item()
+                top5 = top5.item()
 
                 args.writer.add_scalar("test/loss", test_loss, args.num_eval)
                 args.writer.add_scalar("test/acc@1", top1, args.num_eval)
                 args.writer.add_scalar("test/acc@5", top5, args.num_eval)
-#                 wandb.log({"test/loss": test_loss,
-#                            "test/acc@1": top1,
-#                            "test/acc@5": top5})
+                wandb.log({"test/loss": test_loss,
+                           "test/acc@1": top1,
+                           "test/acc@5": top5})
 
                 is_best = top1 > args.best_top1
                 if is_best:
                     args.best_top1 = top1
                     args.best_top5 = top5
-
                 logger.info(f"top-1 acc: {top1:.2f}")
                 logger.info(f"Best top-1 acc: {args.best_top1:.2f}")
 
@@ -336,7 +340,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
 
     if args.local_rank in [-1, 0]:
         args.writer.add_scalar("result/test_acc@1", args.best_top1)
-#         wandb.log({"result/test_acc@1": args.best_top1})
+        wandb.log({"result/test_acc@1": args.best_top1})
 
     # finetune
     del t_scaler, t_scheduler, t_optimizer, teacher_model, labeled_loader, unlabeled_loader
@@ -372,7 +376,8 @@ def evaluate(args, test_loader, model, criterion):
                 outputs = model(images)
                 loss = criterion(outputs, targets)
 
-            acc1, acc5 = accuracy(outputs, targets, (1, 5))
+            acc1 = accuracy(outputs, targets, (1,))
+            acc5 = acc1
             losses.update(loss.item(), batch_size)
             top1.update(acc1[0], batch_size)
             top5.update(acc5[0], batch_size)
@@ -380,8 +385,9 @@ def evaluate(args, test_loader, model, criterion):
             end = time.time()
             test_iter.set_description(
                 f"Test Iter: {step+1:3}/{len(test_loader):3}. Data: {data_time.avg:.2f}s. "
-                f"Batch: {batch_time.avg:.2f}s. Loss: {losses.avg:.4f}. "
-                f"top1: {top1.avg:.2f}. top5: {top5.avg:.2f}. ")
+                # f"Batch: {batch_time.avg:.2f}s. Loss: {losses.avg:.4f}. "
+                # f"top1: {top1.avg:.2f}. top5: {top5.avg:.2f}. "
+            )
 
         test_iter.close()
         return losses.avg, top1.avg, top5.avg
@@ -443,10 +449,10 @@ def finetune(args, finetune_dataset, test_loader, model, criterion):
             args.writer.add_scalar("finetune/test_loss", test_loss, epoch)
             args.writer.add_scalar("finetune/acc@1", top1, epoch)
             args.writer.add_scalar("finetune/acc@5", top5, epoch)
-#             wandb.log({"finetune/train_loss": losses.avg,
-#                        "finetune/test_loss": test_loss,
-#                        "finetune/acc@1": top1,
-#                        "finetune/acc@5": top5})
+            wandb.log({"finetune/train_loss": losses.avg,
+                       "finetune/test_loss": test_loss,
+                       "finetune/acc@1": top1,
+                       "finetune/acc@5": top5})
 
             is_best = top1 > args.best_top1
             if is_best:
@@ -466,7 +472,7 @@ def finetune(args, finetune_dataset, test_loader, model, criterion):
             }, is_best, finetune=True)
         if args.local_rank in [-1, 0]:
             args.writer.add_scalar("result/finetune_acc@1", args.best_top1)
-#             wandb.log({"result/finetune_acc@1": args.best_top1})
+            wandb.log({"result/finetune_acc@1": args.best_top1})
     return
 
 
@@ -500,7 +506,7 @@ def main():
 
     if args.local_rank in [-1, 0]:
         args.writer = SummaryWriter(f"results/{args.name}")
-#         wandb.init(name=args.name, project='MPL', config=args)
+        wandb.init(name=args.name, project='MPL-DriViSafe', config=args)
 
     if args.seed is not None:
         set_seed(args)
@@ -543,16 +549,30 @@ def main():
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()
 
-    teacher_model = WideResNet(num_classes=args.num_classes,
-                               depth=depth,
-                               widen_factor=widen_factor,
-                               dropout=0,
-                               dense_dropout=args.teacher_dropout)
-    student_model = WideResNet(num_classes=args.num_classes,
-                               depth=depth,
-                               widen_factor=widen_factor,
-                               dropout=0,
-                               dense_dropout=args.student_dropout)
+    if args.dataset == 'dreyeve':
+        teacher_model = ViT(
+            image_size = 192,
+            patch_size = 32,
+            num_classes = 2,
+            dim = 1024,
+            depth = 6,
+            heads = 16,
+            mlp_dim = 2048,
+            dropout = 0.1,
+            emb_dropout = 0.1
+        )
+
+    else:
+        teacher_model = WideResNet(num_classes=args.num_classes,
+                                depth=depth,
+                                widen_factor=widen_factor,
+                                dropout=0,
+                                dense_dropout=args.teacher_dropout)
+        student_model = WideResNet(num_classes=args.num_classes,
+                                depth=depth,
+                                widen_factor=widen_factor,
+                                dropout=0,
+                                dense_dropout=args.student_dropout)
 
     if args.local_rank == 0:
         torch.distributed.barrier()
