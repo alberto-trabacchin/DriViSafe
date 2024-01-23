@@ -162,7 +162,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
             if args.world_size > 1:
                 labeled_epoch += 1
                 labeled_loader.sampler.set_epoch(labeled_epoch)
-            print("Pointing to first element of labeled_iter")
+            # print("Pointing to first element of labeled_iter") # <-- Old debug to see where the gpu stops computing
             labeled_iter = iter(labeled_loader)
             # error occurs ↓
             # images_l, targets = labeled_iter.next()
