@@ -4,10 +4,10 @@ Example for running SimpleViT model:
 ```console
 python drivisafe/mpl2/main.py \
 --name=SimpleViT \
---dataset=dreyeve \
+--dataset=dreyeve  \
 --num-classes=2 \
---batch-size=4 \
---eval-step=200 \
+--batch-size=1 \
+--eval-step=500 \
 --num_train_lb=200 \
 --num_val=16 \
 --workers=10 \

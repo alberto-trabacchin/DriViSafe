@@ -18,6 +18,9 @@ from torch.utils.tensorboard import SummaryWriter
 import wandb
 from tqdm import tqdm
 from vit_pytorch import ViT, SimpleViT
+from PIL import Image
+from pathlib import Path
+import csv
 
 from data import DATASET_GETTERS
 from models import WideResNet, ModelEMA
@@ -83,6 +86,7 @@ parser.add_argument("--num_val", type=int, default=2)
 parser.add_argument("--num_test", type=int, default=-1) # <-- Old: now not choosing test size. Just taking all remaining labeled samples.
 parser.add_argument("--subset_size", type=int, default=None)
 parser.add_argument("--model", type=str, default="wideresnet", choices=["wideresnet", "vit", "simplevit"])
+parser.add_argument("--validate", action="store_true")
 
 
 
@@ -117,9 +121,10 @@ def get_lr(optimizer):
     return optimizer.param_groups[0]['lr']
 
 
-def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dataset,
+def train_loop(args, labeled_loader, unlabeled_loader, val_loader, test_loader, finetune_dataset,
                teacher_model, student_model, avg_student_model, criterion,
                t_optimizer, s_optimizer, t_scheduler, s_scheduler, t_scaler, s_scaler):
+
     logger.info("***** Running Training *****")
     logger.info(f"   Task = {args.dataset}@{args.num_labeled}")
     logger.info(f"   Total steps = {args.total_steps}")
@@ -177,7 +182,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
             if args.world_size > 1:
                 unlabeled_epoch += 1
                 unlabeled_loader.sampler.set_epoch(unlabeled_epoch)
-            print("Pointing to first element of unlabeled_iter")
+            # print("Pointing to first element of unlabeled_iter")
             unlabeled_iter = iter(unlabeled_loader)
             # error occurs ↓
             # (images_uw, images_us), _ = unlabeled_iter.next()
@@ -191,9 +196,14 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
         images_us = images_us.to(args.device)
         # images_ul = images_ul.to(args.device)
         targets = targets.to(args.device)
+        
         with amp.autocast(enabled=args.amp):
             batch_size = images_l.shape[0]
             t_images = torch.cat((images_l, images_uw, images_us)) #<-- old concat
+
+            if step == 0:
+                print("t_images shape: ", t_images.shape)
+
             # t_images = torch.cat((images_l, images_ul)) # <-- teacher images are labeled + unlabeled (without preprocessing)
             t_logits = teacher_model(t_images)
             t_logits_l = t_logits[:batch_size]
@@ -211,8 +221,12 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
             )
             weight_u = args.lambda_u * min(1., (step + 1) / args.uda_steps)
             t_loss_uda = t_loss_l + weight_u * t_loss_u
-
+            
             s_images = torch.cat((images_l, images_us))
+
+            if step == 0:
+                print("s_images shape: ", s_images.shape)
+
             # s_images = torch.cat((images_l, images_ul)) # <-- student images are labeled + unlabeled (without preprocessing)
             s_logits = student_model(s_images)
             s_logits_l = s_logits[:batch_size]
@@ -231,6 +245,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
         s_scheduler.step()
         if args.ema > 0:
             avg_student_model.update_parameters(student_model)
+
 
         with amp.autocast(enabled=args.amp):
             with torch.no_grad():
@@ -252,6 +267,8 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
             t_loss = t_loss_uda + t_loss_mpl
 
         t_scaler.scale(t_loss).backward()
+
+
         if args.grad_clip > 0:
             t_scaler.unscale_(t_optimizer)
             nn.utils.clip_grad_norm_(teacher_model.parameters(), args.grad_clip)
@@ -287,6 +304,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
         if args.local_rank in [-1, 0]:
             args.writer.add_scalar("lr", get_lr(s_optimizer), step)
             wandb.log({"lr": get_lr(s_optimizer)})
+
 
         args.num_eval = step // args.eval_step
         if (step + 1) % args.eval_step == 0:
@@ -338,6 +356,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
                     'teacher_scaler': t_scaler.state_dict(),
                     'student_scaler': s_scaler.state_dict(),
                 }, is_best)
+                validate(args, val_loader, test_model)
 
     if args.local_rank in [-1, 0]:
         args.writer.add_scalar("result/test_acc@1", args.best_top1)
@@ -355,7 +374,6 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
     else:
         model_load_state_dict(student_model, checkpoint['student_state_dict'])
     finetune(args, finetune_dataset, test_loader, student_model, criterion)
-    return
 
 
 def evaluate(args, test_loader, model, criterion):
@@ -378,7 +396,7 @@ def evaluate(args, test_loader, model, criterion):
                 loss = criterion(outputs, targets)
 
             acc1 = accuracy(outputs, targets, (1,))
-            acc5 = acc1
+            acc5 = accuracy(outputs, targets, (1,))
             losses.update(loss.item(), batch_size)
             top1.update(acc1[0], batch_size)
             top5.update(acc5[0], batch_size)
@@ -386,37 +404,42 @@ def evaluate(args, test_loader, model, criterion):
             end = time.time()
             test_iter.set_description(
                 f"Test Iter: {step+1:3}/{len(test_loader):3}. Data: {data_time.avg:.2f}s. "
-                # f"Batch: {batch_time.avg:.2f}s. Loss: {losses.avg:.4f}. "
-                # f"top1: {top1.avg:.2f}. top5: {top5.avg:.2f}. "
+                f"Batch: {batch_time.avg:.2f}s. Loss: {losses.avg:.4f}. "
+                f"top1: {top1.avg.item():.2f}. top5: {top5.avg.item():.2f}. "
             )
 
         test_iter.close()
         return losses.avg, top1.avg, top5.avg
     
 
-def validate(args, val_loader, model, criterion): # <-- To continue...
-    batch_time = AverageMeter()
-    data_time = AverageMeter()
+def validate(args, val_loader, model): # <-- To continue...
     model.eval()
     val_iter = tqdm(val_loader, disable=args.local_rank not in [-1, 0])
+    predictions = []
+    img_locations = []
     with torch.no_grad():
-        end = time.time()
         for step, (images, targets) in enumerate(val_iter):
-            data_time.update(time.time() - end)
-            batch_size = images.shape[0]
-            images = images.to(torch.device("cpu"))
-            targets = targets.to(torch.device("cpu"))
+            images = images.to(args.device)
+            targets = targets.to(args.device)
             with amp.autocast(enabled=args.amp):
                 logits = model(images)
                 prob = torch.softmax(logits, dim=-1)
-                classes = torch.argmax(prob, dim=-1)
-                class_names = val_loader.dataset.idx_to_labels(classes)
+                classes = torch.argmax(prob, dim=-1).to(torch.device('cpu')).tolist()
+                class_names = [val_loader.dataset.idx_to_labels[c] for c in classes]
                 paths = val_loader.dataset.full_img_names
+                predictions.extend(class_names)
+                img_locations.extend(paths)
+            val_iter.set_description(
+                        f"Val Iter: {step+1:3}/{len(val_loader):3}."
+                        f"Paths: {img_locations}."
+                        f"Predictions: {predictions}."
+                    )
     
-    for (path, c_name) in zip(paths, class_names):
-        print(f"{path} : {c_name}")
-
-                
+    with open("./data/validation.csv", "w") as f:
+        writer = csv.writer(f)
+        img_locations = [img_loc.name for img_loc in img_locations]
+        writer.writerow(["image", "prediction"])
+        writer.writerows(zip(img_locations, predictions))                
 
 
 def finetune(args, finetune_dataset, test_loader, model, criterion):
@@ -536,7 +559,8 @@ def main():
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()
 
-    labeled_dataset, unlabeled_dataset, test_dataset, finetune_dataset = DATASET_GETTERS[args.dataset](args)
+    labeled_dataset, unlabeled_dataset, val_dataset, \
+    test_dataset, finetune_dataset = DATASET_GETTERS[args.dataset](args)
 
     if args.local_rank in [-1, 0]:
         args.writer = SummaryWriter(f"results/{args.name}")
@@ -562,6 +586,13 @@ def main():
         batch_size=args.batch_size * args.mu,
         num_workers=args.workers,
         drop_last=True)
+    
+    val_loader = DataLoader(
+        val_dataset,
+        sampler=SequentialSampler(val_dataset),
+        batch_size=args.batch_size,
+        num_workers=args.workers,
+        drop_last=False)
 
     test_loader = DataLoader(test_dataset,
                              sampler=SequentialSampler(test_dataset),
@@ -650,9 +681,22 @@ def main():
 
     if args.local_rank == 0:
         torch.distributed.barrier()
-
-    logger.info(f"Model: WideResNet {depth}x{widen_factor}")
-    logger.info(f"Params: {sum(p.numel() for p in teacher_model.parameters())/1e6:.2f}M")
+    
+    if args.model == "wideresnet":
+        logger.info(f"Model: WideResNet {depth}x{widen_factor}")
+    elif args.model == "simplevit":
+        logger.info(f"Model: SimpleViT")
+    else:
+        raise NotImplementedError
+    n_params = sum(p.numel() for p in teacher_model.parameters())
+    param_size = 0
+    for param in teacher_model.parameters():
+        param_size += param.nelement() * param.element_size()
+    buffer_size = 0
+    for buffer in teacher_model.buffers():
+        buffer_size += buffer.nelement() * buffer.element_size()
+    size_all_mb = (param_size + buffer_size) / 1024**2
+    logger.info(f"Params: {n_params/1e6:.2f}M --> {size_all_mb:.2f}MiB")
 
     teacher_model.to(args.device)
     student_model.to(args.device)
@@ -735,26 +779,30 @@ def main():
             output_device=args.local_rank, find_unused_parameters=True)
 
     if args.finetune:
+        print("Fine-tuning")
         del t_scaler, t_scheduler, t_optimizer, teacher_model, unlabeled_loader
         del s_scaler, s_scheduler, s_optimizer
         finetune(args, finetune_dataset, test_loader, student_model, criterion)
         return
 
     if args.evaluate:
+        print("Evaluating")
         del t_scaler, t_scheduler, t_optimizer, teacher_model, unlabeled_loader, labeled_loader
         del s_scaler, s_scheduler, s_optimizer
         evaluate(args, test_loader, student_model, criterion)
         return
     
-    if args.valid:
+    if args.validate:
+        print("Validating")
         del t_scaler, t_scheduler, t_optimizer, teacher_model, unlabeled_loader, labeled_loader
         del s_scaler, s_scheduler, s_optimizer
-        validate(args, val_loader, student_model, criterion)
+        validate(args, val_loader, student_model)
         return
 
     teacher_model.zero_grad()
     student_model.zero_grad()
-    train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dataset,
+    print("Training")
+    train_loop(args, labeled_loader, unlabeled_loader, val_loader, test_loader, finetune_dataset,
                teacher_model, student_model, avg_student_model, criterion,
                t_optimizer, s_optimizer, t_scheduler, s_scheduler, t_scaler, s_scaler)
     return
