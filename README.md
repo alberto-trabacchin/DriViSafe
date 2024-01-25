@@ -17,7 +17,7 @@ python drivisafe/mpl2/main.py \
 Label Studio init from terminal:
 ```console
 LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true \
-LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/mnt/d/Datasets/ \
+LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/media/alberto/Elements/Datasets/ \
 label-studio start --sampling uniform
 ```
 
