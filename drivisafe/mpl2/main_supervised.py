@@ -104,7 +104,7 @@ def train_loop(model, lb_loader, val_loader, test_loader, finetune_loader, optim
         
         pbar.set_description(
             f"Train Iter: {step+1:3}/{args.total_steps:3}."
-            f" train/loss: {loss.item():.6f}."
+            f" train/loss: {statistics.mean(train_losses):.6f}."
         )
         pbar.update()
 

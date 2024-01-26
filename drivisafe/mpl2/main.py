@@ -431,8 +431,6 @@ def validate(args, val_loader, model): # <-- To continue...
                 img_locations.extend(paths)
             val_iter.set_description(
                         f"Val Iter: {step+1:3}/{len(val_loader):3}."
-                        f"Paths: {img_locations}."
-                        f"Predictions: {predictions}."
                     )
     
     with open("./data/validation.csv", "w") as f:
