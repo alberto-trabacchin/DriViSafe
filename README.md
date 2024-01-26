@@ -14,6 +14,11 @@ python drivisafe/mpl2/main.py \
 --model=simplevit
 ```
 
+To increase limit of open files simultaneously:
+```console
+ulimit -n 100000
+```
+
 Label Studio init from terminal:
 ```console
 LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true \
