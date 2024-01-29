@@ -198,8 +198,8 @@ def x_u_split_dreyeve(args, targets):
     train_ul = list(train_ul)
     for i in range(n_classes):
         lb_idxs = np.where(targets == i)[0]
-        # train_lb_class, test_class, _ = np.split(lb_idxs, [lb_size_sec, test_size_sec]) # <-- Old split (test does not take all remaining data)
-        test_class, train_lb_class = np.split(lb_idxs, [test_size_sec]) # <-- New split (train takes all remaining data)
+        train_lb_class, test_class, _ = np.split(lb_idxs, [lb_size_sec, test_size_sec]) # <-- Old split (test does not take all remaining data)
+        # test_class, train_lb_class = np.split(lb_idxs, [test_size_sec]) # <-- New split (train takes all remaining data)
         # train_lb_class, test_class = np.split(lb_idxs, [lb_size_sec]) # <-- New split (test takes all remaining data)
         train_lb.extend(train_lb_class)
         test.extend(test_class)
