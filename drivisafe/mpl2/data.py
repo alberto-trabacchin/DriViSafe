@@ -174,6 +174,8 @@ def get_dreyeve(args):
     print("train_ul len:\t", len(train_ul_idxs))
     print("val len:\t", len(val_idxs))
     print("test len:\t", len(test_idxs))
+    print("test len (Safe):\t", len(np.where(np.array(base_dataset.targets)[test_idxs] == 0)[0]))
+    print("test len (Dangerous):\t", len(np.where(np.array(base_dataset.targets)[test_idxs] == 1)[0]))
 
     return train_labeled_dataset, train_unlabeled_dataset, val_dataset, test_dataset, finetune_dataset
     
@@ -197,7 +199,8 @@ def x_u_split_dreyeve(args, targets):
     for i in range(n_classes):
         lb_idxs = np.where(targets == i)[0]
         # train_lb_class, test_class, _ = np.split(lb_idxs, [lb_size_sec, test_size_sec]) # <-- Old split (test does not take all remaining data)
-        train_lb_class, test_class = np.split(lb_idxs, [lb_size_sec]) # <-- New split (test takes all remaining data)
+        test_class, train_lb_class = np.split(lb_idxs, [test_size_sec]) # <-- New split (train takes all remaining data)
+        # train_lb_class, test_class = np.split(lb_idxs, [lb_size_sec]) # <-- New split (test takes all remaining data)
         train_lb.extend(train_lb_class)
         test.extend(test_class)
     train_ul.extend(train_lb)
@@ -400,9 +403,11 @@ class DreyeveSSL(Dataset):
         target_fnames = []
         for f in json_files:
             annot = json.load(f.open(mode = "r"))
-            annot_target = self.labels_to_idx[annot["result"][0]["value"]["choices"][0]]
-            annot_targets.append(annot_target)
-            target_fnames.append(annot["task"]["data"]["image"].split("/")[-1])
+            if annot["result"]:
+                annot_target = annot["result"][0]["value"]["choices"][0]
+                annot_target = self.labels_to_idx[annot_target]
+                annot_targets.append(annot_target)
+                target_fnames.append(annot["task"]["data"]["image"].split("/")[-1])
 
         for annot_id, annot_fname in enumerate(target_fnames):
             i = img_names.index(annot_fname)

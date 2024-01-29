@@ -83,7 +83,7 @@ parser.add_argument("--local_rank", type=int, default=-1,
 parser.add_argument("--data_path", type=str, default="./data")
 parser.add_argument("--num_train_lb", type=int, default=2)
 parser.add_argument("--num_val", type=int, default=2)
-parser.add_argument("--num_test", type=int, default=-1) # <-- Old: now not choosing test size. Just taking all remaining labeled samples.
+parser.add_argument("--num_test", type=int, default=100) # <-- Old: now not choosing test size. Just taking all remaining labeled samples.
 parser.add_argument("--subset_size", type=int, default=None)
 parser.add_argument("--model", type=str, default="wideresnet", choices=["wideresnet", "vit", "simplevit"])
 parser.add_argument("--validate", action="store_true")
