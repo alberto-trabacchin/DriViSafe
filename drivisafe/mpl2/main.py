@@ -362,6 +362,8 @@ def train_loop(args, labeled_loader, unlabeled_loader, val_loader, test_loader, 
         args.writer.add_scalar("result/test_acc@1", args.best_top1)
         wandb.log({"result/test_acc@1": args.best_top1})
 
+    # No finetuning
+    return
     # finetune
     del t_scaler, t_scheduler, t_optimizer, teacher_model, labeled_loader, unlabeled_loader
     del s_scaler, s_scheduler, s_optimizer
@@ -471,11 +473,15 @@ def finetune(args, finetune_dataset, test_loader, model, criterion):
         for step, (images, targets) in enumerate(labeled_iter):
             data_time.update(time.time() - end)
             batch_size = images.shape[0]
+            print("Before loading images to gpu")
             images = images.to(args.device)
             targets = targets.to(args.device)
+            print("After loading images to gpu")
             with amp.autocast(enabled=args.amp):
                 model.zero_grad()
+                print("Before model forward pass")
                 outputs = model(images)
+                print("After model forward pass")
                 loss = criterion(outputs, targets)
 
             scaler.scale(loss).backward()
@@ -808,3 +814,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+    print("TRAINING FINISHED")

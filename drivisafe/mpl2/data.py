@@ -382,19 +382,28 @@ class DreyeveSSL(Dataset):
     ) -> None:
         root = Path(root)
         self.imgs_path = root / "dreyeve"
-        self.annot_path = root / "data_annotations.json"
+        self.annot_path = root / "targets" / "cars_people"
         self.root = root
         self.full_img_names = [f.absolute() for f in self.imgs_path.iterdir() if f.is_file()]
         img_names = [f.name for f in self.full_img_names]
         self.targets = [-1] * len(img_names)
 
-        annots = json.load(self.annot_path.open(mode = "r"))
         self.labels_to_idx = {"Safe": 0, "Dangerous": 1}
         self.idx_to_labels = {v: k for k, v in self.labels_to_idx.items()}
+        # annots = json.load(self.annot_path.open(mode = "r"))
         # annot_targets = [self.labels_to_idx[d["choice"]] for d in annots] <-- To fix on labelstudio (empty labels)
-        annot_targets = [self.labels_to_idx[d["choice"]] for d in annots if "choice" in d]
+        # annot_targets = [self.labels_to_idx[d["choice"]] for d in annots if "choice" in d]
         # target_fnames = [d["image"][0].split("/")[-1] for d in annots] <-- To fix on labelstudio (empty labels)
-        target_fnames = [d["image"][0].split("/")[-1] for d in annots if "choice" in d]
+        # target_fnames = [d["image"][0].split("/")[-1] for d in annots if "choice" in d]
+        json_files = [f for f in self.annot_path.iterdir() if f.is_file()]
+        annot_targets = []
+        target_fnames = []
+        for f in json_files:
+            annot = json.load(f.open(mode = "r"))
+            annot_target = self.labels_to_idx[annot["result"][0]["value"]["choices"][0]]
+            annot_targets.append(annot_target)
+            target_fnames.append(annot["task"]["data"]["image"].split("/")[-1])
+
         for annot_id, annot_fname in enumerate(target_fnames):
             i = img_names.index(annot_fname)
             target = annot_targets[annot_id]

@@ -30,3 +30,8 @@ Absolute path config in Label Studio:
 ```console
 /mnt/d/Datasets/Dr(eye)ve
 ```
+
+Update labels in the targets folder:
+```
+rm -r ./* && aws s3 sync s3://dreyeve-targets-cars-people ./ && clear && ls -l && ls -1 | wc -l
+```
