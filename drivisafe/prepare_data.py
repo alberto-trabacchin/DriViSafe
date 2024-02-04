@@ -17,14 +17,17 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--dataset-path", type=str, required=True)
 parser.add_argument("--save-path", type=str, default="./data/")
 parser.add_argument("--fps", type=int, default=3)
-parser.add_argument("--resize", type=int, nargs=2, default=(192, 108))
+parser.add_argument("--resize", type=int, nargs=2, default=None)
 args = parser.parse_args()
 
 
 def vid2img(video_path, save_path, resize, fps):
     vid_id = video_path.parent.stem
     logger.info(f"Converting {video_path} to images...")
-    os.system(f'ffmpeg -i {str(video_path)} -vf "scale={resize[0]}:{resize[1]}, fps={fps}" {str(save_path / vid_id)}_%d.jpg')
+    if resize is None:
+        os.system(f'ffmpeg -i {str(video_path)} -vf fps={fps} {str(save_path / vid_id)}_%d.jpg')
+    else:
+        os.system(f'ffmpeg -i {str(video_path)} -vf "scale={resize[0]}:{resize[1]}, fps={fps}" {str(save_path / vid_id)}_%d.jpg')
     return True
 
 
