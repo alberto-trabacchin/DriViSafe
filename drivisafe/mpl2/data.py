@@ -116,7 +116,7 @@ def get_cifar100(args):
     )
     finetune_dataset = CIFAR100SSL(
         args.data_path, finetune_idxs, train=True,
-        transform=transform_fintune
+        transform=transform_finetune
     )
     train_unlabeled_dataset = CIFAR100SSL(
         args.data_path, train_unlabeled_idxs, train=True,
@@ -151,18 +151,23 @@ def get_dreyeve(args):
 
 
     train_labeled_dataset = DreyeveSSL(root = args.data_path,
+                                       targets_name = args.targets_name,
                                        indexs = train_lb_idxs,
                                        transform = transform_labeled)
     train_unlabeled_dataset = DreyeveSSL(root = args.data_path,
+                                         targets_name = args.targets_name,
                                          indexs = train_ul_idxs,
                                          transform = TransformDreyeveMPL(args, mean=normal_mean, std=normal_std))
     val_dataset = DreyeveSSL(root = args.data_path,
+                             targets_name = args.targets_name,
                              indexs = val_idxs,
                              transform = transform_val)
     test_dataset = DreyeveSSL(root = args.data_path,
+                              targets_name = args.targets_name,
                               indexs = test_idxs,
                               transform = transform_val)
     finetune_dataset = DreyeveSSL(root = args.data_path,
+                                  targets_name = args.targets_name,
                                   indexs = finetune_idxs,
                                   transform = transform_finetune)
 
@@ -377,6 +382,7 @@ class DreyeveSSL(Dataset):
     def __init__(
             self,
             root: str,
+            targets_name: str,
             transform: transforms = None,
             target_transform: transforms = None,
             indexs: List[int] = None,
@@ -385,7 +391,7 @@ class DreyeveSSL(Dataset):
     ) -> None:
         root = Path(root)
         self.imgs_path = root / "dreyeve"
-        self.annot_path = root / "targets" / "cars_people"
+        self.annot_path = root / "targets" / targets_name
         self.root = root
         self.full_img_names = [f.absolute() for f in self.imgs_path.iterdir() if f.is_file()]
         img_names = [f.name for f in self.full_img_names]

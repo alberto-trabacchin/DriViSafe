@@ -81,6 +81,7 @@ parser.add_argument("--local_rank", type=int, default=-1,
 
 
 parser.add_argument("--data_path", type=str, default="./data")
+parser.add_argument("--targets-name")
 parser.add_argument("--num_train_lb", type=int, default=2)
 parser.add_argument("--num_val", type=int, default=2)
 parser.add_argument("--num_test", type=int, default=100) # <-- Old: now not choosing test size. Just taking all remaining labeled samples.
