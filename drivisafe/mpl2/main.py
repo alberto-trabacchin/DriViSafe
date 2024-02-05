@@ -22,7 +22,7 @@ from PIL import Image
 from pathlib import Path
 import csv
 
-from data import DATASET_GETTERS
+from data import get_dreyeve
 from models import WideResNet, ModelEMA
 from utils import (AverageMeter, accuracy, create_loss_fn,
                    save_checkpoint, reduce_tensor, model_load_state_dict)
@@ -33,9 +33,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--name', type=str, required=True, help='experiment name')
 parser.add_argument('--data-path', default='./data', type=str, help='data path')
 parser.add_argument('--save-path', default='./checkpoint', type=str, help='save path')
-parser.add_argument('--dataset', default='cifar10', type=str,
+parser.add_argument('--dataset', default='dreyeve', type=str,
                     choices=['cifar10', 'cifar100', 'dreyeve'], help='dataset name')
-parser.add_argument('--num-labeled', type=int, default=4000, help='number of labeled data')
+# parser.add_argument('--num-labeled', type=int, default=4000, help='number of labeled data')
 parser.add_argument("--expand-labels", action="store_true", help="expand labels to fit eval steps")
 parser.add_argument('--total-steps', default=300000, type=int, help='number of total steps to run')
 parser.add_argument('--eval-step', default=1000, type=int, help='number of eval steps to run')
@@ -44,11 +44,11 @@ parser.add_argument('--start-step', default=0, type=int,
 parser.add_argument('--workers', default=4, type=int, help='number of workers')
 parser.add_argument('--num-classes', default=2, type=int, help='number of classes')
 parser.add_argument('--resize', default=32, type=int, help='resize image')
-parser.add_argument('--batch-size', default=64, type=int, help='train batch size')
+parser.add_argument('--batch-size', default=1, type=int, help='train batch size')
 parser.add_argument('--teacher-dropout', default=0, type=float, help='dropout on last dense layer')
 parser.add_argument('--student-dropout', default=0, type=float, help='dropout on last dense layer')
-parser.add_argument('--teacher_lr', default=0.01, type=float, help='train learning late')
-parser.add_argument('--student_lr', default=0.01, type=float, help='train learning late')
+parser.add_argument('--teacher_lr', default=0.001, type=float, help='train learning late')
+parser.add_argument('--student_lr', default=0.001, type=float, help='train learning late')
 parser.add_argument('--momentum', default=0.9, type=float, help='SGD Momentum')
 parser.add_argument('--nesterov', action='store_true', help='use nesterov')
 parser.add_argument('--weight-decay', default=0, type=float, help='train weight decay')
@@ -81,12 +81,12 @@ parser.add_argument("--local_rank", type=int, default=-1,
 
 
 parser.add_argument("--data_path", type=str, default="./data")
-parser.add_argument("--targets-name")
-parser.add_argument("--num_train_lb", type=int, default=2)
+parser.add_argument("--targets-name", required=True, type=str)
+parser.add_argument("--num-labeled", type=int, default=None)
 parser.add_argument("--num_val", type=int, default=2)
 parser.add_argument("--num_test", type=int, default=100) # <-- Old: now not choosing test size. Just taking all remaining labeled samples.
 parser.add_argument("--subset_size", type=int, default=None)
-parser.add_argument("--model", type=str, default="wideresnet", choices=["wideresnet", "vit", "simplevit"])
+parser.add_argument("--model", type=str, required=True, choices=["wideresnet", "vit", "simplevit"])
 parser.add_argument("--validate", action="store_true")
 
 
@@ -357,7 +357,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, val_loader, test_loader, 
                     'teacher_scaler': t_scaler.state_dict(),
                     'student_scaler': s_scaler.state_dict(),
                 }, is_best)
-                validate(args, val_loader, test_model)
+                # validate(args, val_loader, test_model)
 
     if args.local_rank in [-1, 0]:
         args.writer.add_scalar("result/test_acc@1", args.best_top1)
@@ -564,8 +564,7 @@ def main():
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()
 
-    labeled_dataset, unlabeled_dataset, val_dataset, \
-    test_dataset, finetune_dataset = DATASET_GETTERS[args.dataset](args)
+    labeled_dataset, unlabeled_dataset, val_dataset, test_dataset, finetune_dataset = get_dreyeve(args)
 
     if args.local_rank in [-1, 0]:
         args.writer = SummaryWriter(f"results/{args.name}")
