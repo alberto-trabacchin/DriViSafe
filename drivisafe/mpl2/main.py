@@ -47,8 +47,8 @@ parser.add_argument('--resize', default=32, type=int, help='resize image')
 parser.add_argument('--batch-size', default=1, type=int, help='train batch size')
 parser.add_argument('--teacher-dropout', default=0, type=float, help='dropout on last dense layer')
 parser.add_argument('--student-dropout', default=0, type=float, help='dropout on last dense layer')
-parser.add_argument('--teacher_lr', default=0.001, type=float, help='train learning late')
-parser.add_argument('--student_lr', default=0.001, type=float, help='train learning late')
+parser.add_argument('--teacher_lr', default=1e-3, type=float, help='train learning late')
+parser.add_argument('--student_lr', default=1e-3, type=float, help='train learning late')
 parser.add_argument('--momentum', default=0.9, type=float, help='SGD Momentum')
 parser.add_argument('--nesterov', action='store_true', help='use nesterov')
 parser.add_argument('--weight-decay', default=0, type=float, help='train weight decay')
@@ -65,7 +65,7 @@ parser.add_argument('--finetune-batch-size', default=512, type=int, help='finetu
 parser.add_argument('--finetune-lr', default=3e-5, type=float, help='finetune learning late')
 parser.add_argument('--finetune-weight-decay', default=0, type=float, help='finetune weight decay')
 parser.add_argument('--finetune-momentum', default=0.9, type=float, help='finetune SGD Momentum')
-parser.add_argument('--seed', default=None, type=int, help='seed for initializing training')
+parser.add_argument('--seed', default=42, type=int, help='seed for initializing training')
 parser.add_argument('--label-smoothing', default=0, type=float, help='label smoothing alpha')
 parser.add_argument('--mu', default=7, type=int, help='coefficient of unlabeled batch size')
 parser.add_argument('--threshold', default=0.95, type=float, help='pseudo label threshold')
@@ -83,8 +83,8 @@ parser.add_argument("--local_rank", type=int, default=-1,
 parser.add_argument("--data_path", type=str, default="./data")
 parser.add_argument("--targets-name", required=True, type=str)
 parser.add_argument("--num-labeled", type=int, default=None)
-parser.add_argument("--num_val", type=int, default=2)
-parser.add_argument("--num_test", type=int, default=100) # <-- Old: now not choosing test size. Just taking all remaining labeled samples.
+parser.add_argument("--num_val", type=int, default=100)
+parser.add_argument("--num_test", type=int, default=-1) # <-- Old: now not choosing test size. Just taking all remaining labeled samples.
 parser.add_argument("--subset_size", type=int, default=None)
 parser.add_argument("--model", type=str, required=True, choices=["wideresnet", "vit", "simplevit"])
 parser.add_argument("--validate", action="store_true")
@@ -342,6 +342,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, val_loader, test_loader, 
                     args.best_top5 = top5
                 logger.info(f"top-1 acc: {top1:.2f}")
                 logger.info(f"Best top-1 acc: {args.best_top1:.2f}")
+                wandb.log({"result/test_acc@1": args.best_top1})
 
                 save_checkpoint(args, {
                     'step': step + 1,

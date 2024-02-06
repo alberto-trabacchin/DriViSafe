@@ -190,13 +190,13 @@ def get_dreyeve(args):
 def x_u_split_dreyeve(args, targets):
     max_labels1 = sum(1 for n in targets if n==0)
     max_labels2 = sum(1 for n in targets if n==1)
-    max_labels = min(max_labels1, max_labels2)
+    max_labels = 2 * min(max_labels1, max_labels2)
 
     if args.num_labeled is None:
         num_labeled = max_labels
     else:
         num_labeled = max(args.num_labeled, max_labels)
-    label_per_class = num_labeled
+    label_per_class = num_labeled // args.num_classes
     labels = np.array(targets)
     labeled_idx = []
     # unlabeled data: all training data
@@ -210,7 +210,7 @@ def x_u_split_dreyeve(args, targets):
         # extend the list of indices of labeled data
         labeled_idx.extend(idx)
     labeled_idx = np.array(labeled_idx)
-    assert len(labeled_idx) == num_labeled
+    assert (len(labeled_idx) == num_labeled, f"len(labeled_idx) = {len(labeled_idx)}, num_labeled = {num_labeled}")
     np.random.shuffle(labeled_idx)
     return labeled_idx, unlabeled_idx, labeled_idx
     
