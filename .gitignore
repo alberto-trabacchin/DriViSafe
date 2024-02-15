@@ -164,3 +164,4 @@ data/*
 results/*
 wandb/*
 checkpoint/*
+tmp/*
