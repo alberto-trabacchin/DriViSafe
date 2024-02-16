@@ -80,6 +80,7 @@ parser.add_argument('--world-size', default=-1, type=int,
                     help='number of nodes for distributed training')
 parser.add_argument("--local_rank", type=int, default=-1,
                     help="For distributed training: local_rank")
+parser.add_argument("--device", type=str, default = "cuda" if torch.cuda.is_available() else "cpu")
 
 
 parser.add_argument("--data_path", type=str, default="./data")
@@ -89,7 +90,8 @@ parser.add_argument("--num_val", type=int, default=100)
 parser.add_argument("--num_test", type=int, default=-1) # <-- Old: now not choosing test size. Just taking all remaining labeled samples.
 parser.add_argument("--subset_size", type=int, default=None)
 parser.add_argument("--model", type=str, required=True, choices=["wideresnet", "vit", "simplevit"])
-parser.add_argument("--validate", type=int, default=None)
+# parser.add_argument("--validate", type=int, default=None)
+parser.add_argument("--validator", type=int, default=None)
 
 
 
@@ -546,7 +548,7 @@ def main():
         args.gpu = 0
         args.world_size = 1
 
-    args.device = torch.device('cuda', args.gpu) if torch.cuda.is_available() else torch.device('cpu')
+    args.device = torch.device(args.device)
 
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
@@ -569,11 +571,6 @@ def main():
 
     labeled_dataset, unlabeled_dataset, val_dataset, test_dataset, finetune_dataset = get_dreyeve(args)
     
-    # Add validator data
-    if args.validate is not None:
-        val_model = retinanet_resnet50_fpn_v2(weights = RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
-    exit()
-
 
     if args.local_rank in [-1, 0]:
         args.writer = SummaryWriter(f"results/{args.name}")

@@ -17,7 +17,9 @@ from torch.utils.data import DataLoader
 from augmentation import RandAugmentCIFAR
 import argparse
 import random
+import torch
 import os
+from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
 
 
 logger = logging.getLogger(__name__)
@@ -133,6 +135,21 @@ def get_cifar100(args):
 
 
 def get_dreyeve(args):
+
+    def dangerous_scene(prediction):
+        targets = prediction["labels"]
+        accs = prediction["scores"]
+        lb2idx = {
+            "person": 1,
+            "car": 2
+        }
+        for t, acc in zip(targets, accs):
+            if (t == lb2idx["person"] or t == lb2idx["car"]) and acc > 0.5:
+                return True
+            
+        return False
+
+
     transform_labeled = transforms.Compose([
         transforms.ToTensor()
     ])
@@ -178,11 +195,52 @@ def get_dreyeve(args):
                                   targets_name = args.targets_name,
                                   indexs = finetune_idxs,
                                   transform = transform_finetune)
+    
+
+
+    # Add validator data
+    if args.validator is not None:
+        val_idxs = np.setdiff1d(train_ul_idxs, train_lb_idxs)
+        val_idxs = np.random.choice(val_idxs, size = args.validator, replace = False)
+        images = []
+        for i in list(val_idxs):
+            img, _ = base_dataset[i]
+            img = transform_labeled(img)
+            images.append(img)
+        val_images = torch.stack(images)
+        val_model = retinanet_resnet50_fpn_v2(weights = RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
+        val_model = val_model.to(args.device)
+        val_model.eval()
+
+        val_targets = []
+        predictions = []
+        for batch_val_images in torch.split(val_images, args.batch_size):
+            with torch.inference_mode():
+                batch_val_images = batch_val_images.to(args.device)
+                pred_val = val_model(batch_val_images)
+                predictions.extend(pred_val)
+
+        for p in predictions:
+            if dangerous_scene(p):
+                val_targets.append(base_dataset.labels_to_idx["Dangerous (TRAIN)"])
+            else:
+                val_targets.append(base_dataset.labels_to_idx["Safe (TRAIN)"])
+        
+        assert(val_idxs.size == len(val_targets))
+
+    val_images = val_images.cpu().numpy()
+    data = [train_labeled_dataset.data, val_images.transpose(0, 2, 3, 1)]
+    train_labeled_dataset.data = np.vstack(data)
+    train_labeled_dataset.targets.extend(val_targets)
+
 
     print("train_lb len:\t", len(train_labeled_dataset))
     print("train_ul len:\t", len(train_unlabeled_dataset))
     print("val len:\t", len(val_dataset))
     print("test len:\t", len(test_dataset))
+    print("validator-safe:\t", sum(1 for n in val_targets if n==0))
+    print("validator-dang:\t", sum(1 for n in val_targets if n==1))
+    exit()
     
     return train_labeled_dataset, train_unlabeled_dataset, val_dataset, test_dataset, finetune_dataset
 
@@ -446,6 +504,20 @@ class DreyeveSSL(Dataset):
             for t, tfn in zip(train_targets, train_targets_fnames):
                 i = self.data_fnames.index(tfn)
                 self.targets[i] = t
+
+            # if args.validator is not None:
+            #     i = self.targets.index(-1)
+            #     val_i = random.sample(i, counts = args.validator)
+            #     val_data_paths = [self.all_data_paths[i] for i in val_i]
+            #     val_model = retinanet_resnet50_fpn_v2(weitghts = RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
+            #     val_model = val_model.to(args.device)
+            #     val_data = []
+            #     for vdp in val_data_paths:
+            #         val_data.append(Image.open(vdp))
+                
+
+
+
 
         elif self.mode == "val":
             self.data_fnames = self.all_data_fnames.copy()
