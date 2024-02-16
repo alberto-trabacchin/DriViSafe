@@ -242,7 +242,6 @@ def get_dreyeve(args):
     print("test len:\t", len(test_dataset))
     print("validator-safe:\t", sum(1 for n in val_targets if n==0))
     print("validator-dang:\t", sum(1 for n in val_targets if n==1))
-    exit()
     return train_labeled_dataset, train_unlabeled_dataset, val_dataset, test_dataset, finetune_dataset
 
 
