@@ -141,10 +141,13 @@ def get_dreyeve(args):
         accs = prediction["scores"]
         lb2idx = {
             "person": 1,
-            "car": 2
+            "car": 3,
+            "motorcycle": 4,
+            "bus": 6,
+            "truck": 8
         }
         for t, acc in zip(targets, accs):
-            if (t == lb2idx["person"] or t == lb2idx["car"]) and acc > 0.5:
+            if (t in lb2idx.values()) and acc > 0.5:
                 return True
             
         return False
@@ -232,7 +235,6 @@ def get_dreyeve(args):
         data = [train_labeled_dataset.data, val_images.transpose(0, 2, 3, 1)]
         train_labeled_dataset.data = np.vstack(data)
         train_labeled_dataset.targets.extend(val_targets)
-
 
     print("train_lb len:\t", len(train_labeled_dataset))
     print("train_ul len:\t", len(train_unlabeled_dataset))
