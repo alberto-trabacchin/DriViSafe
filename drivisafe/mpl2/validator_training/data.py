@@ -228,10 +228,10 @@ def get_dreyeve(args):
         
         assert(val_idxs.size == len(val_targets))
 
-    val_images = val_images.cpu().numpy()
-    data = [train_labeled_dataset.data, val_images.transpose(0, 2, 3, 1)]
-    train_labeled_dataset.data = np.vstack(data)
-    train_labeled_dataset.targets.extend(val_targets)
+        val_images = val_images.cpu().numpy()
+        data = [train_labeled_dataset.data, val_images.transpose(0, 2, 3, 1)]
+        train_labeled_dataset.data = np.vstack(data)
+        train_labeled_dataset.targets.extend(val_targets)
 
 
     print("train_lb len:\t", len(train_labeled_dataset))
@@ -240,7 +240,7 @@ def get_dreyeve(args):
     print("test len:\t", len(test_dataset))
     print("validator-safe:\t", sum(1 for n in val_targets if n==0))
     print("validator-dang:\t", sum(1 for n in val_targets if n==1))
-    
+    exit()
     return train_labeled_dataset, train_unlabeled_dataset, val_dataset, test_dataset, finetune_dataset
 
 
