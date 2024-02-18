@@ -622,7 +622,7 @@ def main():
     if args.dataset == 'dreyeve':
         if args.model == "vit":
             teacher_model = ViT(
-                image_size = (108, 192),
+                image_size = (216, 384),
                 patch_size = 6,
                 num_classes = 2,
                 dim = 1024,
@@ -633,7 +633,7 @@ def main():
                 emb_dropout = 0.1
             )
             student_model = ViT(
-                image_size = (108, 192),
+                image_size = (216, 384),
                 patch_size = 6,
                 num_classes = 2,
                 dim = 1024,
@@ -645,22 +645,22 @@ def main():
             )
         elif args.model == "simplevit":
             teacher_model = SimpleViT(
-                image_size = (108, 192),
-                patch_size = 6,
+                image_size = (216, 384),
+                patch_size = 12,
                 num_classes = 2,
-                dim = 1024,
+                dim = 128,
                 depth = 6,
                 heads = 16,
-                mlp_dim = 2048
+                mlp_dim = 4096
             )
             student_model = SimpleViT(
-                image_size = (108, 192),
-                patch_size = 6,
+                image_size = (216, 384),
+                patch_size = 12,
                 num_classes = 2,
-                dim = 1024,
+                dim = 128,
                 depth = 6,
                 heads = 16,
-                mlp_dim = 2048
+                mlp_dim = 4096
             )
             wandb.watch(models = teacher_model, log = "all")
         elif args.model == "wideresnet":
